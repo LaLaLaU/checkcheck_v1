@@ -218,12 +218,12 @@ class RegionDetector:
             x, y, w, h = label_region_info['bbox']
             cv2.rectangle(vis_image, (x, y), (x + w, y + h), self.label_color, 2)
             label_text = label_region_info.get('text', 'Label?') # Get text if available
-            cv2.putText(vis_image, label_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, self.label_color, 2)
+            cv2.putText(vis_image, label_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.0, self.label_color, 2)
 
         if print_region_info and 'bbox' in print_region_info:
             x, y, w, h = print_region_info['bbox']
             cv2.rectangle(vis_image, (x, y), (x + w, y + h), self.print_color, 2)
             print_text = print_region_info.get('text', 'Print?') # Get text if available
-            cv2.putText(vis_image, print_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, self.print_color, 2)
+            cv2.putText(vis_image, print_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.0, self.print_color, 2)
 
         return vis_image

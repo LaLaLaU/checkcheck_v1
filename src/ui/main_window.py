@@ -11,12 +11,12 @@ import sys
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QFileDialog, QMessageBox,
     QSplitter, QFrame, QGroupBox, QProgressDialog,
     QApplication
 )
-from PyQt5.QtGui import QPixmap, QImage
+from PyQt5.QtGui import QPixmap, QImage, QFont
 from PyQt5.QtCore import Qt, QSize
 
 # 导入核心处理模块
@@ -108,16 +108,23 @@ class MainWindow(QMainWindow):
         results_group = QGroupBox("识别结果")
         results_layout = QVBoxLayout(results_group)
         
+        # 定义更大的字体
+        result_font = QFont()
+        result_font.setPointSize(14) # 设置字体大小为 14
+        
         # 标牌文字结果
         self.label_text_result = QLabel("标牌文字: 等待识别...")
+        self.label_text_result.setFont(result_font) # 应用字体
         results_layout.addWidget(self.label_text_result)
         
         # 喷码文字结果
         self.print_text_result = QLabel("喷码文字: 等待识别...")
+        self.print_text_result.setFont(result_font) # 应用字体
         results_layout.addWidget(self.print_text_result)
         
         # 比对结果
         self.comparison_result = QLabel("比对结果: 等待比对...")
+        self.comparison_result.setFont(result_font) # 应用字体
         results_layout.addWidget(self.comparison_result)
         
         # 添加结果组到底部布局
