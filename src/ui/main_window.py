@@ -8,13 +8,19 @@ CheckCheck 导管喷码自动核对系统 - 主窗口
 
 import os
 import sys
+import cv2
+import numpy as np
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QFileDialog, QMessageBox,
-    QSplitter, QFrame, QGroupBox
+    QSplitter, QFrame, QGroupBox, QProgressDialog,
+    QApplication
 )
 from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import Qt, QSize
+
+# 导入核心处理模块
+from src.core.processor import ImageProcessor
 
 
 class MainWindow(QMainWindow):
@@ -35,9 +41,34 @@ class MainWindow(QMainWindow):
         # 初始化成员变量
         self.image_path = None
         self.current_image = None
+        self.cv_image = None  # OpenCV格式的图像
+        self.processor = None  # 图像处理器
+        self.processing_result = None  # 处理结果
         
         # 设置UI
         self._setup_ui()
+        
+        # 初始化图像处理器
+        self._init_processor()
+        
+    def _init_processor(self):
+        """
+        初始化图像处理器
+        """
+        # 创建进度对话框
+        progress = QProgressDialog("正在初始化OCR引擎...", None, 0, 0, self)
+        progress.setWindowTitle("初始化中")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.show()
+        QApplication.processEvents()
+        
+        # 初始化图像处理器
+        try:
+            self.processor = ImageProcessor(use_gpu=False)
+            progress.close()
+        except Exception as e:
+            progress.close()
+            QMessageBox.critical(self, "错误", f"初始化OCR引擎失败: {str(e)}")
         
     def _setup_ui(self):
         """
@@ -158,6 +189,9 @@ class MainWindow(QMainWindow):
         # 保存当前图像
         self.current_image = pixmap
         
+        # 加载OpenCV格式的图像
+        self.cv_image = cv2.imread(image_path)
+        
         # 调整图像大小以适应标签
         pixmap = self._resize_pixmap(pixmap)
         
@@ -172,6 +206,9 @@ class MainWindow(QMainWindow):
         self.label_text_result.setText("标牌文字: 等待识别...")
         self.print_text_result.setText("喷码文字: 等待识别...")
         self.comparison_result.setText("比对结果: 等待比对...")
+        
+        # 清除处理结果
+        self.processing_result = None
     
     def _resize_pixmap(self, pixmap):
         """
@@ -199,13 +236,90 @@ class MainWindow(QMainWindow):
         """
         处理开始识别按钮点击事件
         """
-        # 这里暂时只显示一个消息框，后续会实现实际的OCR识别功能
-        QMessageBox.information(
-            self, 
-            "信息", 
-            f"将对图像 {os.path.basename(self.image_path)} 进行OCR识别\n"
-            "此功能将在后续阶段实现"
-        )
+        # 检查是否已加载图像
+        if self.cv_image is None:
+            QMessageBox.warning(self, "警告", "请先上传图像")
+            return
+        
+        # 检查处理器是否初始化
+        if self.processor is None:
+            QMessageBox.critical(self, "错误", "OCR引擎未初始化")
+            return
+        
+        # 创建进度对话框
+        progress = QProgressDialog("正在处理图像...", None, 0, 0, self)
+        progress.setWindowTitle("处理中")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.show()
+        QApplication.processEvents()
+        
+        try:
+            # 处理图像
+            self.processing_result = self.processor.process_image(self.cv_image)
+            
+            # 更新UI显示结果
+            self._update_results_display()
+            
+            # 显示处理后的图像
+            self._display_processed_image()
+            
+            progress.close()
+        except Exception as e:
+            progress.close()
+            QMessageBox.critical(self, "错误", f"图像处理失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    def _update_results_display(self):
+        """
+        更新结果显示
+        """
+        if not self.processing_result:
+            return
+        
+        # 获取结果
+        label_text = self.processing_result.get('label_text', "")
+        print_text = self.processing_result.get('print_text', "")
+        comparison = self.processing_result.get('comparison', {})
+        
+        # 更新标牌文字
+        self.label_text_result.setText(f"标牌文字: {label_text}")
+        
+        # 更新喷码文字
+        self.print_text_result.setText(f"喷码文字: {print_text}")
+        
+        # 更新比对结果
+        similarity = comparison.get('similarity', 0.0)
+        is_match = comparison.get('is_match', False)
+        
+        result_text = f"比对结果: 相似度 {similarity:.2%}, "
+        if is_match:
+            result_text += "<span style='color: green;'>通过</span>"
+        else:
+            result_text += "<span style='color: red;'>不通过</span>"
+        
+        self.comparison_result.setText(result_text)
+        self.comparison_result.setTextFormat(Qt.RichText)
+    
+    def _display_processed_image(self):
+        """
+        显示处理后的图像
+        """
+        if not self.processing_result or 'visualized_image' not in self.processing_result:
+            return
+        
+        # 获取处理后的图像
+        vis_image = self.processing_result['visualized_image']
+        
+        # 转换为QPixmap
+        height, width, channel = vis_image.shape
+        bytes_per_line = 3 * width
+        q_image = QImage(vis_image.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+        pixmap = QPixmap.fromImage(q_image)
+        
+        # 调整大小并显示
+        pixmap = self._resize_pixmap(pixmap)
+        self.image_label.setPixmap(pixmap)
     
     def on_open_settings(self):
         """

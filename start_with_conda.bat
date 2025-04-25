@@ -10,6 +10,9 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
+REM Set environment variable to allow duplicate OpenMP libraries
+set KMP_DUPLICATE_LIB_OK=TRUE
+
 REM Run the application using conda run command in the checkcheck environment
 conda run -n checkcheck python src/main.py
 if %ERRORLEVEL% NEQ 0 (
