@@ -16,7 +16,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # 导入主窗口
 from src.ui.main_window import MainWindow
 
-
 def main():
     """
     应用程序主入口函数

@@ -21,7 +21,8 @@ from PyQt5.QtCore import Qt, QSize
 
 # 导入核心处理模块
 from src.core.processor import ImageProcessor
-
+from src.utils.database_manager import init_db, add_history_record
+from src.ui.history_window import HistoryWindow
 
 class MainWindow(QMainWindow):
     """
@@ -44,6 +45,12 @@ class MainWindow(QMainWindow):
         self.cv_image = None  # OpenCV格式的图像
         self.processor = None  # 图像处理器
         self.processing_result = None  # 处理结果
+        
+        # 初始化数据库
+        try:
+            init_db()
+        except Exception as e:
+            QMessageBox.critical(self, "数据库错误", f"无法初始化历史记录数据库: {e}")
         
         # 设置UI
         self._setup_ui()
@@ -168,11 +175,11 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(self.settings_button)
         
         # 历史记录按钮
-        self.history_button = QPushButton("历史记录")
-        history_icon = self.style().standardIcon(QStyle.SP_FileDialogListView) # 获取标准图标
-        self.history_button.setIcon(history_icon) # 设置图标
-        self.history_button.setIconSize(QSize(24, 24)) # 设置图标大小
-        self.history_button.clicked.connect(self.on_open_history)
+        self.history_button = QPushButton(" 历史记录") # Keep space for alignment if needed
+        history_icon = self.style().standardIcon(QStyle.SP_FileDialogListView) # Use standard icon
+        self.history_button.setIcon(history_icon)
+        self.history_button.setIconSize(QSize(24, 24)) # Match other buttons' icon size
+        self.history_button.clicked.connect(self._show_history_window)
         button_layout.addWidget(self.history_button)
         
         # 将按钮布局添加到下方布局
@@ -331,6 +338,32 @@ class MainWindow(QMainWindow):
             # 显示处理后的图像
             self._display_processed_image()
             
+            # 保存历史记录
+            if self.processing_result:
+                try:
+                    # 提取原始文本和结果 - **使用原始文本字段**
+                    # !! 请确保 'label_text' 和 'print_text' 是 processor 返回结果中包含原始文本的正确键名 !!
+                    sign_text_raw = self.processing_result.get('label_text', "") # <--- Correct key for label text
+                    print_text_raw = self.processing_result.get('print_text', "") # <--- 使用原始喷码文本
+                    similarity = self.processing_result.get('comparison', {}).get('similarity', 0.0)
+                    result_str = "通过" if abs(similarity - 1.0) < 1e-6 else "不通过"
+                    
+                    # 保存历史记录
+                    if self.image_path:
+                        add_history_record(
+                            self.image_path, 
+                            sign_text_raw, 
+                            print_text_raw, 
+                            similarity, 
+                            result_str
+                        )
+                    else:
+                        print("Warning: current_image_path is not set, cannot save history.") # 或者记录日志
+                except Exception as e:
+                    QMessageBox.warning(self, "历史记录错误", f"无法保存历史记录: {e}")
+                    # 或者记录日志
+                    print(f"Error saving history: {e}")
+        
         except Exception as e:
             QMessageBox.critical(self, "错误", f"图像处理失败: {str(e)}")
             import traceback
@@ -403,16 +436,13 @@ class MainWindow(QMainWindow):
             "设置功能将在后续阶段实现"
         )
     
-    def on_open_history(self):
-        """
-        处理打开历史记录按钮点击事件
-        """
-        QMessageBox.information(
-            self, 
-            "信息", 
-            "历史记录功能将在后续阶段实现"
-        )
-    
+    def _show_history_window(self):
+        """Opens the history window dialog."""
+        # Check if an instance already exists to avoid multiple windows (optional)
+        # Or simply create a new modal dialog each time
+        history_dialog = HistoryWindow(self) # Pass parent for modality if desired
+        history_dialog.exec_() # Show as a modal dialog
+
     def resizeEvent(self, event):
         """
         处理窗口大小改变事件，重新调整图像大小
