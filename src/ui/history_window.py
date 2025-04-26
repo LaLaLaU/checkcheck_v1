@@ -2,10 +2,11 @@ import sys
 import os # Import os for path checking
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QTableWidget, 
-    QTableWidgetItem, QHeaderView, QMessageBox, QTextEdit, QLabel
+    QTableWidgetItem, QHeaderView, QMessageBox, QTextEdit, QLabel,
+    QLineEdit, QComboBox, QHBoxLayout
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPixmap, QFont, QColor 
+from PyQt5.QtGui import QPixmap, QFont, QColor, QTextCursor, QTextCharFormat, QTextDocument 
 
 # Import function to get history data
 from src.utils.database_manager import get_all_history
@@ -20,15 +21,35 @@ class HistoryWindow(QDialog):
 
         self.comparator = TextComparator()
 
+        # --- Layouts --- 
+        self.layout = QVBoxLayout(self)
+        filter_layout = QHBoxLayout() # Layout for filters
+
+        # --- Filter Widgets --- 
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("搜索标牌或喷码文字...")
+        self.search_input.textChanged.connect(self._apply_filters) 
+ 
+        self.filter_combo = QComboBox()
+        self.filter_combo.addItems(['全部', '通过', '不通过'])
+        self.filter_combo.currentIndexChanged.connect(self._apply_filters)
+
+        filter_layout.addWidget(QLabel("搜索:"))
+        filter_layout.addWidget(self.search_input)
+        filter_layout.addWidget(QLabel("结果:"))
+        filter_layout.addWidget(self.filter_combo)
+
+        self.layout.addLayout(filter_layout) # Add filter layout to main layout
+
         self._setup_ui()
         self._load_history_data() # Load data when the window is initialized
+        self._apply_filters() # Apply initial filter state (show all)
 
     def _setup_ui(self):
         """Sets up the UI elements for the history window."""
-        layout = QVBoxLayout(self)
-
+        # --- History Table --- 
         self.history_table = QTableWidget()
-        layout.addWidget(self.history_table)
+        self.layout.addWidget(self.history_table)
 
         # Define table columns
         self.column_headers = ["时间戳", "图片路径", "标牌文字", "喷码文字", "相似度", "结果"]
@@ -113,6 +134,79 @@ class HistoryWindow(QDialog):
             self.history_table.setItem(row_idx, 0, timestamp_item)
             self.history_table.setItem(row_idx, 4, similarity_item)
             self.history_table.setItem(row_idx, 5, result_item)
+
+    def _apply_filters(self):
+        """Applies search and filter criteria to the history table."""
+        search_term = self.search_input.text().lower()
+        filter_text = self.filter_combo.currentText()
+
+        for row in range(self.history_table.rowCount()):
+            sign_widget = self.history_table.cellWidget(row, 2)
+            print_widget = self.history_table.cellWidget(row, 3)
+            result_item = self.history_table.item(row, 5)
+
+            if not sign_widget or not print_widget or not result_item: # Should not happen
+                continue
+
+            sign_text = sign_widget.toPlainText().lower()
+            print_text = print_widget.toPlainText().lower()
+            result_text = result_item.text()
+
+            # Check search match
+            search_match = (
+                not search_term or 
+                search_term in sign_text or 
+                search_term in print_text
+            )
+
+            # Check filter match
+            filter_match = (
+                filter_text == '全部' or
+                filter_text == result_text
+            )
+
+            # Set row visibility
+            is_visible = search_match and filter_match
+            self.history_table.setRowHidden(row, not is_visible)
+
+            # Apply/clear highlight if row is visible
+            if is_visible:
+                self._highlight_text(row, self.search_input.text()) # Pass original case for highlighting
+            # No need to explicitly clear highlight if hidden, but good practice if shown
+            elif not is_visible and self.search_input.text(): # Ensure highlight clears if made visible again without search
+                 self._highlight_text(row, "")
+
+    def _highlight_text(self, row_index, search_term):
+        """Highlights occurrences of search_term in sign and print columns for a given row."""
+        columns_to_highlight = [2, 3] # Sign Text, Print Text
+
+        highlight_format = QTextCharFormat()
+        highlight_format.setBackground(QColor("yellow"))
+
+        clear_format = QTextCharFormat()
+        clear_format.setBackground(Qt.transparent)
+
+        for col_index in columns_to_highlight:
+            widget = self.history_table.cellWidget(row_index, col_index)
+            if isinstance(widget, QTextEdit):
+                document = widget.document()
+                cursor = QTextCursor(document)
+
+                # --- Clear previous yellow background highlight --- 
+                cursor.movePosition(QTextCursor.Start)
+                cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
+                cursor.mergeCharFormat(clear_format) # Apply transparent background
+
+                # --- Apply new highlight if search_term is provided ---
+                if search_term:
+                    cursor.movePosition(QTextCursor.Start) # Reset cursor position
+                    find_flags = QTextDocument.FindFlags() # Default is case-insensitive
+                    while True:
+                        cursor = document.find(search_term, cursor, find_flags)
+                        if cursor.isNull():
+                            break # No more occurrences found
+                        # Apply yellow background to the found selection
+                        cursor.mergeCharFormat(highlight_format) 
 
     def _on_cell_clicked(self, row, column):
         """Handles clicks on table cells."""
