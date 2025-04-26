@@ -30,6 +30,32 @@ def init_db():
         )
     ''')
     
+    # Additionally, create a unique index to ensure the constraint exists even if the table was created before
+    # Remove or comment out the old index if it exists (optional, but cleaner)
+    # cursor.execute('DROP INDEX IF EXISTS idx_history_unique;') 
+    
+    # Before creating the new unique index, delete existing duplicates based on the new criteria
+    # Keep the row with the minimum id for each group of duplicates
+    cursor.execute('''
+        DELETE FROM history
+        WHERE id NOT IN (
+            SELECT MIN(id)
+            FROM history
+            GROUP BY sign_text, print_text, similarity, result
+        );
+    ''')
+    conn.commit() # Commit the deletion
+    
+    # Create the new unique index based on content similarity and result
+    cursor.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_history_content_unique 
+        ON history (sign_text, print_text, similarity, result);
+    ''')
+    # cursor.execute('''
+    #     CREATE UNIQUE INDEX IF NOT EXISTS idx_history_unique 
+    #     ON history (image_path, sign_text, print_text);
+    # ''') # Commented out the old index creation
+ 
     conn.commit()
     conn.close()
     print(f"Database initialized at {DB_PATH}")
@@ -61,6 +87,24 @@ def get_all_history():
     
     conn.close()
     return rows
+
+# --- Check for Existence --- 
+def check_history_exists(sign_text: str, print_text: str, similarity: float, result: str) -> bool:
+    """Checks if a record with the exact same content already exists."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT 1 
+        FROM history 
+        WHERE sign_text = ? AND print_text = ? AND similarity = ? AND result = ?
+        LIMIT 1
+    ''', (sign_text, print_text, similarity, result))
+    
+    exists = cursor.fetchone() is not None
+    
+    conn.close()
+    return exists
 
 # Example usage (for testing)
 if __name__ == '__main__':

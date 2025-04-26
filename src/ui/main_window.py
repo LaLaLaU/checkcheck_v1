@@ -16,13 +16,84 @@ from PyQt5.QtWidgets import (
     QSplitter, QFrame, QGroupBox, QProgressDialog,
     QApplication, QFormLayout, QStyle
 )
-from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader
+from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal
 
 # 导入核心处理模块
 from src.core.processor import ImageProcessor
-from src.utils.database_manager import init_db, add_history_record
+from src.utils.database_manager import init_db, add_history_record, check_history_exists # Import check_history_exists
 from src.ui.history_window import HistoryWindow
+
+# --- Custom Widget for Drag and Drop --- 
+
+class ImageDropLabel(QLabel):
+    """A QLabel subclass that accepts image file drops."""
+    fileDropped = pyqtSignal(str) # Signal emitted when a valid image file is dropped
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setAlignment(Qt.AlignCenter)
+        self.setText("请拖拽图片到此处或点击“上传图像”按钮")
+        self.setFrameShape(QFrame.Box)
+        self.setMinimumHeight(400)
+        self.setStyleSheet("background-color: #f0f0f0; color: gray;")
+        self.setObjectName("image_label") # Keep object name
+
+    def dragEnterEvent(self, event):
+        """Handles drag entering the widget."""
+        mime_data = event.mimeData()
+        if mime_data.hasUrls() and all(url.isLocalFile() for url in mime_data.urls()):
+            # Check if any dropped file is a supported image format
+            supported_formats = [fmt.data().decode().lower() for fmt in QImageReader.supportedImageFormats()]
+            for url in mime_data.urls():
+                file_ext = os.path.splitext(url.toLocalFile())[1].lower().lstrip('.')
+                if file_ext in supported_formats:
+                    event.acceptProposedAction()
+                    self.setStyleSheet("background-color: #e0e0e0; border: 2px dashed #aaaaaa; color: black;") # Indicate droppable
+                    return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        """Handles drag moving over the widget."""
+        mime_data = event.mimeData()
+        if mime_data.hasUrls() and all(url.isLocalFile() for url in mime_data.urls()):
+             # Check if any dropped file is a supported image format (optional, but good practice)
+            supported_formats = [fmt.data().decode().lower() for fmt in QImageReader.supportedImageFormats()]
+            for url in mime_data.urls():
+                file_ext = os.path.splitext(url.toLocalFile())[1].lower().lstrip('.')
+                if file_ext in supported_formats:
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def dragLeaveEvent(self, event):
+        """Reset background when drag leaves."""
+        self.setStyleSheet("background-color: #f0f0f0; color: gray;") # Reset style
+        event.accept()
+
+    def dropEvent(self, event):
+        """Handles the drop event."""
+        self.setStyleSheet("background-color: #f0f0f0; color: gray;") # Reset style on drop
+        mime_data = event.mimeData()
+        if mime_data.hasUrls():
+            supported_formats = [fmt.data().decode().lower() for fmt in QImageReader.supportedImageFormats()]
+            valid_image_path = None
+            for url in mime_data.urls():
+                file_path = url.toLocalFile()
+                file_ext = os.path.splitext(file_path)[1].lower().lstrip('.')
+                if os.path.isfile(file_path) and file_ext in supported_formats:
+                    valid_image_path = file_path
+                    break # Process the first valid image
+            
+            if valid_image_path:
+                self.fileDropped.emit(valid_image_path) # Emit signal with path
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+        else:
+            event.ignore()
+
 
 class MainWindow(QMainWindow):
     """
@@ -96,13 +167,8 @@ class MainWindow(QMainWindow):
         image_widget = QWidget()
         image_layout = QVBoxLayout(image_widget)
         
-        # 图像显示标签
-        self.image_label = QLabel("请上传图像")
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setFrameShape(QFrame.Box)
-        self.image_label.setMinimumHeight(400)
-        self.image_label.setStyleSheet("background-color: #f0f0f0;")
-        self.image_label.setObjectName("image_label") # 给图像标签设置对象名以便QSS选择
+        # 图像显示标签 - 使用自定义的 ImageDropLabel
+        self.image_label = ImageDropLabel(self) # Instantiate custom label
         image_layout.addWidget(self.image_label)
         
         # 添加到分割器
@@ -232,6 +298,9 @@ class MainWindow(QMainWindow):
                 border: 1px solid #cccccc;
             }
         """)
+        
+        # Connect the drop signal
+        self.image_label.fileDropped.connect(self._load_image)
     
     def on_upload_image(self):
         """
@@ -345,20 +414,24 @@ class MainWindow(QMainWindow):
                     # !! 请确保 'label_text' 和 'print_text' 是 processor 返回结果中包含原始文本的正确键名 !!
                     sign_text_raw = self.processing_result.get('label_text', "") # <--- Correct key for label text
                     print_text_raw = self.processing_result.get('print_text', "") # <--- 使用原始喷码文本
-                    similarity = self.processing_result.get('comparison', {}).get('similarity', 0.0)
+                    similarity = self.processing_result.get('similarity', 0.0)
                     result_str = "通过" if abs(similarity - 1.0) < 1e-6 else "不通过"
                     
-                    # 保存历史记录
-                    if self.image_path:
-                        add_history_record(
-                            self.image_path, 
-                            sign_text_raw, 
-                            print_text_raw, 
-                            similarity, 
-                            result_str
-                        )
-                    else:
-                        print("Warning: current_image_path is not set, cannot save history.") # 或者记录日志
+                    # Check if this exact result already exists in history
+                    record_exists = check_history_exists(sign_text_raw, print_text_raw, similarity, result_str)
+                    
+                    # Add record to history database (using plain text)
+                    add_history_record(
+                        self.image_path,
+                        sign_text_raw,
+                        print_text_raw,
+                        similarity,
+                        result_str
+                    )
+                    
+                    # Append existence note if necessary
+                    if record_exists:
+                        self.comparison_result.setText(self.comparison_result.text() + " <span style='color: gray; font-size: 9pt;'>(已存在该条记录)</span>")
                 except Exception as e:
                     QMessageBox.warning(self, "历史记录错误", f"无法保存历史记录: {e}")
                     # 或者记录日志
@@ -456,3 +529,43 @@ class MainWindow(QMainWindow):
         if self.current_image:
             pixmap = self._resize_pixmap(self.current_image)
             self.image_label.setPixmap(pixmap)
+
+    def _load_image(self, image_path):
+        """
+        加载并显示图像
+        
+        Args:
+            image_path (str): 图像文件路径
+        """
+        # 保存图像路径
+        self.image_path = image_path
+        
+        # 加载图像
+        pixmap = QPixmap(image_path)
+        if pixmap.isNull():
+            QMessageBox.critical(self, "错误", "无法加载图像文件")
+            return
+        
+        # 保存当前图像
+        self.current_image = pixmap
+        
+        # 加载OpenCV格式的图像
+        self.cv_image = cv2.imread(image_path)
+        
+        # 调整图像大小以适应标签
+        pixmap = self._resize_pixmap(pixmap)
+        
+        # 显示图像
+        self.image_label.setPixmap(pixmap)
+        self.image_label.setAlignment(Qt.AlignCenter)
+        
+        # 启用识别按钮
+        self.recognize_button.setEnabled(True)
+        
+        # 重置结果显示
+        self.label_text_result.setText("标牌文字: 等待识别...")
+        self.print_text_result.setText("喷码文字: 等待识别...")
+        self.comparison_result.setText("比对结果: 等待比对...")
+        
+        # 清除处理结果
+        self.processing_result = None

@@ -2,13 +2,14 @@ import sys
 import os # Import os for path checking
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QTableWidget, 
-    QTableWidgetItem, QHeaderView, QLabel, QMessageBox # Add QLabel, QMessageBox
+    QTableWidgetItem, QHeaderView, QMessageBox, QTextEdit, QLabel
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPixmap, QFont, QColor # Add QPixmap, QFont, QColor
+from PyQt5.QtGui import QPixmap, QFont, QColor 
 
 # Import function to get history data
 from src.utils.database_manager import get_all_history
+from src.core.text_comparator import TextComparator
 
 class HistoryWindow(QDialog):
     """Dialog window to display recognition history."""
@@ -16,6 +17,8 @@ class HistoryWindow(QDialog):
         super().__init__(parent)
         self.setWindowTitle("识别历史记录")
         self.setMinimumSize(800, 400) # Set a minimum size
+
+        self.comparator = TextComparator()
 
         self._setup_ui()
         self._load_history_data() # Load data when the window is initialized
@@ -73,23 +76,41 @@ class HistoryWindow(QDialog):
             
             # Create QTableWidgetItem for each cell
             timestamp_item = QTableWidgetItem(str(row_data[0]))
-            image_path_item = QTableWidgetItem(str(row_data[1]))
-            sign_text_item = QTableWidgetItem(str(row_data[2]))
-            print_text_item = QTableWidgetItem(str(row_data[3]))
-            similarity_item = QTableWidgetItem(similarity_str)
-            result_item = QTableWidgetItem(str(row_data[5]))
             
+            image_path_item = QTableWidgetItem(str(row_data[1]))
             # Style the image path item to look like a link
             link_font = QFont()
             link_font.setUnderline(True)
             image_path_item.setFont(link_font)
             image_path_item.setForeground(QColor('blue'))
+            self.history_table.setItem(row_idx, 1, image_path_item)
+            
+            sign_text_raw = str(row_data[2])
+            print_text_raw = str(row_data[3])
+            
+            # --- Use QTextEdit for RichText (HTML) display --- 
+            sign_html, print_html = self.comparator.format_diff_html(sign_text_raw, print_text_raw)
+            
+            # Create QTextEdit for sign text
+            sign_text_edit = QTextEdit()
+            sign_text_edit.setReadOnly(True) # Make it non-editable
+            sign_text_edit.setHtml(sign_html) # Set content using HTML
+            # Style to blend in: remove border, transparent background
+            sign_text_edit.setStyleSheet("QTextEdit { border: none; background-color: transparent; }")
+            self.history_table.setCellWidget(row_idx, 2, sign_text_edit)
+            
+            # Create QTextEdit for print text
+            print_text_edit = QTextEdit()
+            print_text_edit.setReadOnly(True)
+            print_text_edit.setHtml(print_html)
+            print_text_edit.setStyleSheet("QTextEdit { border: none; background-color: transparent; }")
+            self.history_table.setCellWidget(row_idx, 3, print_text_edit)
+            
+            similarity_item = QTableWidgetItem(similarity_str)
+            result_item = QTableWidgetItem(str(row_data[5]))
             
             # Set items in the table row
             self.history_table.setItem(row_idx, 0, timestamp_item)
-            self.history_table.setItem(row_idx, 1, image_path_item)
-            self.history_table.setItem(row_idx, 2, sign_text_item)
-            self.history_table.setItem(row_idx, 3, print_text_item)
             self.history_table.setItem(row_idx, 4, similarity_item)
             self.history_table.setItem(row_idx, 5, result_item)
 

@@ -133,12 +133,12 @@ class TextComparator:
                 html1 += diff['text1_value']
                 html2 += diff['text2_value']
             elif diff['type'] == 'replace':
-                html1 += f'<span style="background-color: #ffcccc;">{diff["text1_value"]}</span>'
-                html2 += f'<span style="background-color: #ccffcc;">{diff["text2_value"]}</span>'
+                html1 += f'<b><font color="red">{diff["text1_value"]}</font></b>'
+                html2 += f'<b><font color="green">{diff["text2_value"]}</font></b>'
             elif diff['type'] == 'delete':
-                html1 += f'<span style="background-color: #ffcccc;">{diff["text1_value"]}</span>'
+                html1 += f'<b><font color="red">{diff["text1_value"]}</font></b>'
             elif diff['type'] == 'insert':
-                html2 += f'<span style="background-color: #ccffcc;">{diff["text2_value"]}</span>'
+                html2 += f'<b><font color="green">{diff["text2_value"]}</font></b>'
         
         return html1, html2
     
