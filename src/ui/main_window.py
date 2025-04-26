@@ -14,9 +14,9 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QFileDialog, QMessageBox,
     QSplitter, QFrame, QGroupBox, QProgressDialog,
-    QApplication
+    QApplication, QFormLayout, QStyle
 )
-from PyQt5.QtGui import QPixmap, QImage, QFont
+from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon
 from PyQt5.QtCore import Qt, QSize
 
 # 导入核心处理模块
@@ -95,6 +95,7 @@ class MainWindow(QMainWindow):
         self.image_label.setFrameShape(QFrame.Box)
         self.image_label.setMinimumHeight(400)
         self.image_label.setStyleSheet("background-color: #f0f0f0;")
+        self.image_label.setObjectName("image_label") # 给图像标签设置对象名以便QSS选择
         image_layout.addWidget(self.image_label)
         
         # 添加到分割器
@@ -104,64 +105,126 @@ class MainWindow(QMainWindow):
         bottom_widget = QWidget()
         bottom_layout = QVBoxLayout(bottom_widget)
         
-        # 结果显示区
+        # 结果显示区 (使用 QFormLayout)
         results_group = QGroupBox("识别结果")
-        results_layout = QVBoxLayout(results_group)
-        
+        results_layout = QFormLayout(results_group) 
+        results_layout.setRowWrapPolicy(QFormLayout.WrapLongRows) # 允许长行换行
+        results_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        results_layout.setLabelAlignment(Qt.AlignLeft)
+        results_layout.setVerticalSpacing(15) # 增大行之间的垂直间距
+
         # 定义更大的字体
         result_font = QFont()
         result_font.setPointSize(14) # 设置字体大小为 14
         
         # 标牌文字结果
-        self.label_text_result = QLabel("标牌文字: 等待识别...")
+        self.label_text_result = QLabel("等待识别...")
         self.label_text_result.setFont(result_font) # 应用字体
-        results_layout.addWidget(self.label_text_result)
+        self.label_text_result.setWordWrap(True) # 允许换行
+        results_layout.addRow(self.label_text_result) # 移除标签
         
         # 喷码文字结果
-        self.print_text_result = QLabel("喷码文字: 等待识别...")
+        self.print_text_result = QLabel("等待识别...")
         self.print_text_result.setFont(result_font) # 应用字体
-        results_layout.addWidget(self.print_text_result)
+        self.print_text_result.setWordWrap(True) # 允许换行
+        results_layout.addRow(self.print_text_result) # 移除标签
         
-        # 比对结果
-        self.comparison_result = QLabel("比对结果: 等待比对...")
+        # 比对结果 (改回 QLabel)
+        self.comparison_result = QLabel("等待比对...") # 改回 QLabel
         self.comparison_result.setFont(result_font) # 应用字体
-        results_layout.addWidget(self.comparison_result)
+        self.comparison_result.setTextFormat(Qt.RichText) # 允许富文本
+        self.comparison_result.setWordWrap(True) # 允许换行
+        # QLabel 默认是左对齐的，通常不需要显式设置
+        results_layout.addRow(self.comparison_result) # 移除标签
         
-        # 添加结果组到底部布局
         bottom_layout.addWidget(results_group)
         
         # 控制按钮区域
-        buttons_layout = QHBoxLayout()
+        button_layout = QHBoxLayout()
         
         # 上传图像按钮
         self.upload_button = QPushButton("上传图像")
+        upload_icon = self.style().standardIcon(QStyle.SP_DialogOpenButton) # 获取标准图标
+        self.upload_button.setIcon(upload_icon) # 设置图标
+        self.upload_button.setIconSize(QSize(24, 24)) # 设置图标大小
         self.upload_button.clicked.connect(self.on_upload_image)
-        buttons_layout.addWidget(self.upload_button)
+        button_layout.addWidget(self.upload_button)
         
         # 开始识别按钮
         self.recognize_button = QPushButton("开始识别")
+        recognize_icon = self.style().standardIcon(QStyle.SP_MediaPlay) # 获取标准图标
+        self.recognize_button.setIcon(recognize_icon) # 设置图标
+        self.recognize_button.setIconSize(QSize(24, 24)) # 设置图标大小
         self.recognize_button.clicked.connect(self.on_start_recognition)
         self.recognize_button.setEnabled(False)  # 初始禁用，直到上传图像
-        buttons_layout.addWidget(self.recognize_button)
+        button_layout.addWidget(self.recognize_button)
         
         # 设置按钮
         self.settings_button = QPushButton("设置")
+        settings_icon = self.style().standardIcon(QStyle.SP_FileDialogDetailedView) # 获取标准图标
+        self.settings_button.setIcon(settings_icon) # 设置图标
+        self.settings_button.setIconSize(QSize(24, 24)) # 设置图标大小
         self.settings_button.clicked.connect(self.on_open_settings)
-        buttons_layout.addWidget(self.settings_button)
+        button_layout.addWidget(self.settings_button)
         
         # 历史记录按钮
         self.history_button = QPushButton("历史记录")
+        history_icon = self.style().standardIcon(QStyle.SP_FileDialogListView) # 获取标准图标
+        self.history_button.setIcon(history_icon) # 设置图标
+        self.history_button.setIconSize(QSize(24, 24)) # 设置图标大小
         self.history_button.clicked.connect(self.on_open_history)
-        buttons_layout.addWidget(self.history_button)
+        button_layout.addWidget(self.history_button)
         
-        # 添加按钮布局到底部布局
-        bottom_layout.addLayout(buttons_layout)
+        # 将按钮布局添加到下方布局
+        bottom_layout.addLayout(button_layout)
         
         # 添加到分割器
         splitter.addWidget(bottom_widget)
         
-        # 设置分割器初始大小
-        splitter.setSizes([600, 200])
+        # 设置分割器比例
+        splitter.setSizes([int(self.height() * 0.7), int(self.height() * 0.3)])
+
+        # 应用简单的 QSS 样式
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #ffffff; /* 设置主窗口背景色 */
+            }
+            QGroupBox {
+                font-size: 12pt; /* 组框标题字体大小 */
+                border: 1px solid #cccccc; /* 组框边框 */
+                border-radius: 5px; /* 圆角 */
+                margin-top: 1.5ex; /* 增大顶部外边距，为标题留出更多空间 */
+                padding-top: 12px; /* 增加顶部内边距，将内容向下推 */
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 3px;
+                left: 10px; /* 标题左边距 */
+            }
+            QPushButton {
+                padding: 8px 15px; /* 按钮内边距 */
+                border: 1px solid #cccccc;
+                border-radius: 4px;
+                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f6f7fa, stop:1 #dadbde); /* 渐变背景 */
+                min-width: 80px; /* 按钮最小宽度 */
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #e6e7ea, stop:1 #ced0d4); /* 悬停效果 */
+            }
+            QPushButton:pressed {
+                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #dadbde, stop:1 #f6f7fa); /* 按下效果 */
+            }
+            QPushButton:disabled {
+                background-color: #e0e0e0; /* 禁用状态 */
+                color: #a0a0a0;
+            }
+            QLabel#image_label {
+                background-color: #f0f0f0;
+                border: 1px solid #cccccc;
+            }
+        """)
     
     def on_upload_image(self):
         """
@@ -252,13 +315,11 @@ class MainWindow(QMainWindow):
         if self.processor is None:
             QMessageBox.critical(self, "错误", "OCR引擎未初始化")
             return
-        
-        # 创建进度对话框
-        progress = QProgressDialog("正在处理图像...", None, 0, 0, self)
-        progress.setWindowTitle("处理中")
-        progress.setWindowModality(Qt.WindowModal)
-        progress.show()
-        QApplication.processEvents()
+
+        # 禁用按钮并显示状态
+        self.recognize_button.setEnabled(False)
+        self.recognize_button.setText("正在处理...")
+        QApplication.processEvents() # 确保UI更新
         
         try:
             # 处理图像
@@ -270,12 +331,14 @@ class MainWindow(QMainWindow):
             # 显示处理后的图像
             self._display_processed_image()
             
-            progress.close()
         except Exception as e:
-            progress.close()
             QMessageBox.critical(self, "错误", f"图像处理失败: {str(e)}")
             import traceback
             traceback.print_exc()
+        finally:
+            # 恢复按钮状态
+            self.recognize_button.setEnabled(True)
+            self.recognize_button.setText("开始识别")
     
     def _update_results_display(self):
         """
@@ -285,29 +348,31 @@ class MainWindow(QMainWindow):
             return
         
         # 获取结果
-        label_text = self.processing_result.get('label_text', "")
-        print_text = self.processing_result.get('print_text', "")
+        html_label_text = self.processing_result.get('html_label_text', "")
+        html_print_text = self.processing_result.get('html_print_text', "")
         comparison = self.processing_result.get('comparison', {})
         
-        # 更新标牌文字
-        self.label_text_result.setText(f"标牌文字: {label_text}")
+        # 更新标牌文字 (使用HTML)
+        self.label_text_result.setText(f"标牌文字: {html_label_text}")
+        self.label_text_result.setTextFormat(Qt.RichText) # 确保能解析HTML
         
-        # 更新喷码文字
-        self.print_text_result.setText(f"喷码文字: {print_text}")
+        # 更新喷码文字 (使用HTML)
+        self.print_text_result.setText(f"喷码文字: {html_print_text}")
+        self.print_text_result.setTextFormat(Qt.RichText) # 确保能解析HTML
         
         # 更新比对结果
         similarity = comparison.get('similarity', 0.0)
-        is_match = comparison.get('is_match', False)
         
-        result_text = f"比对结果: 相似度 {similarity:.2%}, "
-        if is_match:
-            result_text += "<span style='color: green;'>通过</span>"
+        result_text = f"相似度 {similarity:.2%}" # 只显示相似度
+        
+        # 仅在 100% 相似时判断为通过
+        if abs(similarity - 1.0) < 1e-6: # 使用浮点数比较
+            result_text += ", <b><span style='color: green;'>✔ 通过</span></b>" # 添加 ✔ 图标
         else:
-            result_text += "<span style='color: red;'>不通过</span>"
-        
-        self.comparison_result.setText(result_text)
-        self.comparison_result.setTextFormat(Qt.RichText)
-    
+            result_text += ", <b><span style='color: red;'>✘ 不通过</span></b>" # 添加 ✘ 图标
+
+        self.comparison_result.setText(result_text) # 使用 setText 更新 QLabel
+
     def _display_processed_image(self):
         """
         显示处理后的图像

@@ -74,6 +74,12 @@ class ImageProcessor:
         # 文本比对
         comparison = self.text_comparator.compare_texts(label_text, print_text)
         
+        # 生成差异高亮的HTML文本
+        html_label_text, html_print_text = self.text_comparator.format_diff_html(label_text, print_text)
+
+        # 获取当前阈值
+        current_threshold = self.get_similarity_threshold()
+
         # 可视化结果
         visualized_image = self.region_detector.visualize_regions(image, regions)
         
@@ -81,7 +87,12 @@ class ImageProcessor:
             'regions': regions,
             'label_text': label_text,
             'print_text': print_text,
-            'comparison': comparison,
+            'html_label_text': html_label_text, 
+            'html_print_text': html_print_text, 
+            'comparison': { 
+                **comparison, 
+                'threshold': current_threshold
+            },
             'visualized_image': visualized_image
         }
     
@@ -106,6 +117,15 @@ class ImageProcessor:
         """
         self.text_comparator.set_similarity_threshold(threshold)
     
+    def get_similarity_threshold(self) -> float:
+        """
+        获取当前相似度阈值
+
+        Returns:
+            float: 当前相似度阈值
+        """
+        return self.text_comparator.get_similarity_threshold()
+
     def set_confidence_threshold(self, threshold: float) -> None:
         """
         设置OCR置信度阈值
