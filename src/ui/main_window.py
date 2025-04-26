@@ -179,8 +179,8 @@ class MainWindow(QMainWindow):
         bottom_layout = QVBoxLayout(bottom_widget)
         
         # 结果显示区 (使用 QFormLayout)
-        results_group = QGroupBox("识别结果")
-        results_layout = QFormLayout(results_group) 
+        self.results_groupbox = QGroupBox("识别结果")
+        results_layout = QFormLayout(self.results_groupbox) 
         results_layout.setRowWrapPolicy(QFormLayout.WrapLongRows) # 允许长行换行
         results_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
         results_layout.setLabelAlignment(Qt.AlignLeft)
@@ -210,7 +210,7 @@ class MainWindow(QMainWindow):
         # QLabel 默认是左对齐的，通常不需要显式设置
         results_layout.addRow(self.comparison_result) # 移除标签
         
-        bottom_layout.addWidget(results_group)
+        bottom_layout.addWidget(self.results_groupbox)
         
         # 控制按钮区域
         button_layout = QHBoxLayout()
@@ -259,45 +259,23 @@ class MainWindow(QMainWindow):
 
         # 应用简单的 QSS 样式
         self.setStyleSheet("""
-            QMainWindow {
-                background-color: #ffffff; /* 设置主窗口背景色 */
-            }
-            QGroupBox {
-                font-size: 12pt; /* 组框标题字体大小 */
-                border: 1px solid #cccccc; /* 组框边框 */
-                border-radius: 5px; /* 圆角 */
-                margin-top: 1.5ex; /* 增大顶部外边距，为标题留出更多空间 */
-                padding-top: 12px; /* 增加顶部内边距，将内容向下推 */
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 3px;
-                left: 10px; /* 标题左边距 */
-            }
-            QPushButton {
-                padding: 8px 15px; /* 按钮内边距 */
-                border: 1px solid #cccccc;
-                border-radius: 4px;
-                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f6f7fa, stop:1 #dadbde); /* 渐变背景 */
-                min-width: 80px; /* 按钮最小宽度 */
-                font-size: 10pt;
-            }
-            QPushButton:hover {
-                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #e6e7ea, stop:1 #ced0d4); /* 悬停效果 */
-            }
-            QPushButton:pressed {
-                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #dadbde, stop:1 #f6f7fa); /* 按下效果 */
-            }
-            QPushButton:disabled {
-                background-color: #e0e0e0; /* 禁用状态 */
-                color: #a0a0a0;
-            }
-            QLabel#image_label {
-                background-color: #f0f0f0;
-                border: 1px solid #cccccc;
-            }
+            QMainWindow { background-color: #ffffff; }
+            QGroupBox { font-size: 12pt; border: 1px solid #cccccc; border-radius: 5px; margin-top: 1.5ex; padding-top: 12px; }
+            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 3px; left: 10px; }
+            QPushButton { padding: 8px 15px; border: 1px solid #cccccc; border-radius: 4px; background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f6f7fa, stop:1 #dadbde); min-width: 80px; font-size: 10pt; }
+            QPushButton:hover { background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #e6e7ea, stop:1 #ced0d4); }
+            QPushButton:pressed { background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #dadbde, stop:1 #f6f7fa); }
+            QPushButton:disabled { background-color: #e0e0e0; color: #a0a0a0; }
+            QLabel#image_label { background-color: #f0f0f0; border: 1px solid #cccccc; }
         """)
+        
+        self.base_groupbox_style = "QGroupBox {{ border: 1px solid gray; border-radius: 5px; margin-top: 0.5em; background-color: {background_color}; }} QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; }}"
+        self.default_groupbox_background = "transparent"
+        self.pass_background_color = "#ccffcc" # Light green
+        self.fail_background_color = "#ffcccc" # Light red
+        
+        # 设置初始默认背景（可能会被全局样式覆盖，但没关系，处理时会重新设置）
+        self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
         
         # Connect the drop signal
         self.image_label.fileDropped.connect(self._load_image)
@@ -352,6 +330,7 @@ class MainWindow(QMainWindow):
         self.label_text_result.setText("标牌文字: 等待识别...")
         self.print_text_result.setText("喷码文字: 等待识别...")
         self.comparison_result.setText("比对结果: 等待比对...")
+        self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
         
         # 清除处理结果
         self.processing_result = None
@@ -474,11 +453,16 @@ class MainWindow(QMainWindow):
         # 仅在 100% 相似时判断为通过
         if abs(similarity - 1.0) < 1e-6: # 使用浮点数比较
             result_text += ", <b><span style='color: green;'>✔ 通过</span></b>" # 添加 ✔ 图标
+            bg_color = self.pass_background_color
         else:
             result_text += ", <b><span style='color: red;'>✘ 不通过</span></b>" # 添加 ✘ 图标
-
+            bg_color = self.fail_background_color
+ 
         self.comparison_result.setText(result_text) # 使用 setText 更新 QLabel
-
+ 
+        # Apply background color to the results groupbox
+        self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=bg_color))
+ 
     def _display_processed_image(self):
         """
         显示处理后的图像
@@ -566,6 +550,7 @@ class MainWindow(QMainWindow):
         self.label_text_result.setText("标牌文字: 等待识别...")
         self.print_text_result.setText("喷码文字: 等待识别...")
         self.comparison_result.setText("比对结果: 等待比对...")
+        self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
         
         # 清除处理结果
         self.processing_result = None
