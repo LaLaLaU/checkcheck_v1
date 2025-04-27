@@ -9,6 +9,7 @@ CheckCheck 导管喷码自动核对系统 - 主程序入口
 import sys
 import os
 from PyQt5.QtWidgets import QApplication
+import logging
 
 # 确保可以导入其他模块
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,6 +24,18 @@ def main():
     # 创建QApplication实例
     app = QApplication(sys.argv)
     
+    # 配置日志记录
+    logging.basicConfig(level=logging.DEBUG, 
+                        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                        handlers=[
+                            logging.StreamHandler(sys.stdout) 
+                            # 可以添加 FileHandler 输出到文件
+                            # logging.FileHandler("app.log") 
+                        ])
+
+    logger = logging.getLogger(__name__)
+    logger.info("Application starting...") 
+
     # 设置应用程序信息
     app.setApplicationName("CheckCheck")
     app.setOrganizationName("CheckCheck")

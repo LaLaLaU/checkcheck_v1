@@ -17,12 +17,14 @@ from PyQt5.QtWidgets import (
     QApplication, QFormLayout, QStyle
 )
 from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader
-from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal
-
-# 导入核心处理模块
+from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, QThread
 from src.core.processor import ImageProcessor
-from src.utils.database_manager import init_db, add_history_record, check_history_exists # Import check_history_exists
+from src.utils.database_manager import init_db, add_history_record, check_history_exists
 from src.ui.history_window import HistoryWindow
+from src.workers.camera_worker import CameraWorker
+import logging
+
+logger = logging.getLogger(__name__)
 
 # --- Custom Widget for Drag and Drop --- 
 
@@ -112,11 +114,20 @@ class MainWindow(QMainWindow):
         
         # 初始化成员变量
         self.image_path = None
-        self.current_image = None
-        self.cv_image = None  # OpenCV格式的图像
-        self.processor = None  # 图像处理器
+        self.current_image = None # QPixmap from loaded file
+        self.cv_image = None      # OpenCV format image (from file or camera)
+        self.processor = None     # 图像处理器
         self.processing_result = None  # 处理结果
-        
+        self.camera_thread = None      # Thread for camera worker
+        self.camera_worker = None      # Worker for camera capture
+        self.camera_running = False    # Flag for camera state
+        self.camera_index = 1 # TODO: Make configurable
+
+        # 定义颜色常量
+        self.pass_background_color = "#e0ffe0" # Light green for pass
+        self.fail_background_color = "#ffcccc" # Light red for fail
+        self.default_groupbox_background = "transparent"
+
         # 初始化数据库
         try:
             init_db()
@@ -128,7 +139,11 @@ class MainWindow(QMainWindow):
         
         # 初始化图像处理器
         self._init_processor()
-        
+        # 初始化相机（但不启动）
+        self._init_camera()
+        # 自动启动摄像头
+        self.start_camera()
+
     def _init_processor(self):
         """
         初始化图像处理器
@@ -148,116 +163,111 @@ class MainWindow(QMainWindow):
             progress.close()
             QMessageBox.critical(self, "错误", f"初始化OCR引擎失败: {str(e)}")
         
+    def _init_camera(self):
+        """
+        初始化相机相关设置（如果需要）
+        """
+        # 目前没有需要预加载的相机设置
+        logger.info("Camera system initialized (worker/thread not started yet).")
+        pass 
+
     def _setup_ui(self):
         """
         设置UI布局和组件
         """
-        # 创建中央部件
+        # 主窗口和中心控件
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        
-        # 创建主布局
         main_layout = QVBoxLayout(central_widget)
         
-        # 创建分割器，上方为图像显示区，下方为结果显示区
-        splitter = QSplitter(Qt.Vertical)
+        # 创建垂直分割器
+        splitter = QSplitter(Qt.Vertical) # Revert to Vertical
         main_layout.addWidget(splitter)
         
         # 上方区域 - 图像显示
         image_widget = QWidget()
         image_layout = QVBoxLayout(image_widget)
-        
-        # 图像显示标签 - 使用自定义的 ImageDropLabel
-        self.image_label = ImageDropLabel(self) # Instantiate custom label
+        self.image_label = ImageDropLabel(self) # Use the custom label
+        self.image_label.fileDropped.connect(self.load_image)
         image_layout.addWidget(self.image_label)
-        
-        # 添加到分割器
         splitter.addWidget(image_widget)
         
-        # 下方区域 - 结果显示和控制按钮
+        # --- Bottom Panel (Controls and Results) - Reverted Structure ---
         bottom_widget = QWidget()
         bottom_layout = QVBoxLayout(bottom_widget)
-        
+        bottom_layout.setContentsMargins(10, 10, 10, 10)
+        bottom_layout.setSpacing(10) # Adjust spacing as needed
+
         # 结果显示区 (使用 QFormLayout)
         self.results_groupbox = QGroupBox("识别结果")
         results_layout = QFormLayout(self.results_groupbox) 
-        results_layout.setRowWrapPolicy(QFormLayout.WrapLongRows) # 允许长行换行
-        results_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-        results_layout.setLabelAlignment(Qt.AlignLeft)
-        results_layout.setVerticalSpacing(15) # 增大行之间的垂直间距
+        results_layout.setContentsMargins(10, 10, 10, 10) # Add padding inside the groupbox
+        results_layout.setSpacing(10)       # Add spacing between rows
+        results_layout.setLabelAlignment(Qt.AlignRight) # Align labels to the right
 
-        # 定义更大的字体
-        result_font = QFont()
-        result_font.setPointSize(14) # 设置字体大小为 14
-        
-        # 标牌文字结果
-        self.label_text_result = QLabel("等待识别...")
-        self.label_text_result.setFont(result_font) # 应用字体
-        self.label_text_result.setWordWrap(True) # 允许换行
-        results_layout.addRow(self.label_text_result) # 移除标签
-        
-        # 喷码文字结果
-        self.print_text_result = QLabel("等待识别...")
-        self.print_text_result.setFont(result_font) # 应用字体
-        self.print_text_result.setWordWrap(True) # 允许换行
-        results_layout.addRow(self.print_text_result) # 移除标签
-        
-        # 比对结果 (改回 QLabel)
-        self.comparison_result = QLabel("等待比对...") # 改回 QLabel
-        self.comparison_result.setFont(result_font) # 应用字体
-        self.comparison_result.setTextFormat(Qt.RichText) # 允许富文本
-        self.comparison_result.setWordWrap(True) # 允许换行
+        font = QFont()
+        font.setPointSize(12) # Increase font size
+
+        self.label_text_result = QLabel("标牌文字: 等待识别...")
+        self.label_text_result.setFont(font)
+        self.label_text_result.setTextInteractionFlags(Qt.TextSelectableByMouse) # Allow text selection
+        results_layout.addRow(self.label_text_result) # Remove label for single line
+
+        self.print_text_result = QLabel("喷码文字: 等待识别...")
+        self.print_text_result.setFont(font)
+        self.print_text_result.setTextInteractionFlags(Qt.TextSelectableByMouse) # Allow text selection
+        results_layout.addRow(self.print_text_result) # Remove label for single line
+
+        self.comparison_result = QLabel("比对结果: 等待比对...")
+        self.comparison_result.setFont(font)
+        self.comparison_result.setTextInteractionFlags(Qt.TextSelectableByMouse) # Allow text selection
         # QLabel 默认是左对齐的，通常不需要显式设置
         results_layout.addRow(self.comparison_result) # 移除标签
         
-        bottom_layout.addWidget(self.results_groupbox)
-        
-        # 控制按钮区域
+        bottom_layout.addWidget(self.results_groupbox) # Add results groupbox to bottom layout
+
+        # 控制按钮区域 (Horizontal Layout)
         button_layout = QHBoxLayout()
-        
-        # 上传图像按钮
-        self.upload_button = QPushButton("上传图像")
-        upload_icon = self.style().standardIcon(QStyle.SP_DialogOpenButton) # 获取标准图标
-        self.upload_button.setIcon(upload_icon) # 设置图标
-        self.upload_button.setIconSize(QSize(24, 24)) # 设置图标大小
+        button_layout.setSpacing(10)
+
+        # 获取标准图标
+        upload_icon = self.style().standardIcon(QStyle.SP_DialogOpenButton)
+        recognize_icon = self.style().standardIcon(QStyle.SP_MediaPlay) 
+        history_icon = self.style().standardIcon(QStyle.SP_FileDialogListView) # Matching screenshot's likely icon
+        settings_icon = self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
+
+        self.upload_button = QPushButton(upload_icon, " 上传图像")
+        self.upload_button.setToolTip("从文件选择图像")
         self.upload_button.clicked.connect(self.on_upload_image)
         button_layout.addWidget(self.upload_button)
-        
-        # 开始识别按钮
-        self.recognize_button = QPushButton("开始识别")
-        recognize_icon = self.style().standardIcon(QStyle.SP_MediaPlay) # 获取标准图标
-        self.recognize_button.setIcon(recognize_icon) # 设置图标
-        self.recognize_button.setIconSize(QSize(24, 24)) # 设置图标大小
+
+        self.recognize_button = QPushButton(recognize_icon, " 开始识别")
+        self.recognize_button.setToolTip("对当前加载的图像进行识别和比对")
         self.recognize_button.clicked.connect(self.on_start_recognition)
-        self.recognize_button.setEnabled(False)  # 初始禁用，直到上传图像
+        self.recognize_button.setEnabled(False) # Initially disabled
         button_layout.addWidget(self.recognize_button)
-        
-        # 设置按钮
-        self.settings_button = QPushButton("设置")
-        settings_icon = self.style().standardIcon(QStyle.SP_FileDialogDetailedView) # 获取标准图标
-        self.settings_button.setIcon(settings_icon) # 设置图标
-        self.settings_button.setIconSize(QSize(24, 24)) # 设置图标大小
-        self.settings_button.clicked.connect(self.on_open_settings)
-        button_layout.addWidget(self.settings_button)
-        
-        # 历史记录按钮
-        self.history_button = QPushButton(" 历史记录") # Keep space for alignment if needed
-        history_icon = self.style().standardIcon(QStyle.SP_FileDialogListView) # Use standard icon
-        self.history_button.setIcon(history_icon)
-        self.history_button.setIconSize(QSize(24, 24)) # Match other buttons' icon size
+
+        self.history_button = QPushButton(history_icon, " 历史记录") # Match screenshot text
+        self.history_button.setToolTip("查看历史识别记录")
         self.history_button.clicked.connect(self._show_history_window)
         button_layout.addWidget(self.history_button)
+
+        self.settings_button = QPushButton(settings_icon, " 设置")
+        self.settings_button.setToolTip("应用程序设置")
+        self.settings_button.clicked.connect(self.on_open_settings)
+        button_layout.addWidget(self.settings_button)
         
         # 将按钮布局添加到下方布局
         bottom_layout.addLayout(button_layout)
         
-        # 添加到分割器
+        # 添加下方控件到分割器
         splitter.addWidget(bottom_widget)
         
-        # 设置分割器比例
-        splitter.setSizes([int(self.height() * 0.7), int(self.height() * 0.3)])
+        # 设置分割器初始比例 (approximate from screenshot)
+        # Adjust these values as needed
+        splitter.setSizes([int(self.height() * 0.7), int(self.height() * 0.3)]) 
 
-        # 应用简单的 QSS 样式
+        # 应用简单的 QSS 样式 (Keep existing styles)
         self.setStyleSheet("""
             QMainWindow { background-color: #ffffff; }
             QGroupBox { font-size: 12pt; border: 1px solid #cccccc; border-radius: 5px; margin-top: 1.5ex; padding-top: 12px; }
@@ -270,9 +280,6 @@ class MainWindow(QMainWindow):
         """)
         
         self.base_groupbox_style = "QGroupBox {{ border: 1px solid gray; border-radius: 5px; margin-top: 0.5em; background-color: {background_color}; }} QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; }}"
-        self.default_groupbox_background = "transparent"
-        self.pass_background_color = "#ccffcc" # Light green
-        self.fail_background_color = "#ffcccc" # Light red
         
         # 设置初始默认背景（可能会被全局样式覆盖，但没关系，处理时会重新设置）
         self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
@@ -334,7 +341,12 @@ class MainWindow(QMainWindow):
         
         # 清除处理结果
         self.processing_result = None
-    
+        
+        # 如果摄像头在运行，停止它
+        if self.camera_running:
+             logger.info("Stopping camera because new image was loaded.")
+             self.stop_camera()
+
     def _resize_pixmap(self, pixmap):
         """
         调整图像大小以适应标签
@@ -362,10 +374,15 @@ class MainWindow(QMainWindow):
         处理开始识别按钮点击事件
         """
         # 检查是否已加载图像
-        if self.cv_image is None:
-            QMessageBox.warning(self, "警告", "请先上传图像")
+        if not self.cv_image:
+            QMessageBox.warning(self, "警告", "请先加载图像")
             return
-        
+
+        # 检查摄像头是否正在运行
+        if self.camera_running:
+             QMessageBox.warning(self, "警告", "请先停止摄像头，再进行识别。")
+             return
+
         # 检查处理器是否初始化
         if self.processor is None:
             QMessageBox.critical(self, "错误", "OCR引擎未初始化")
@@ -479,10 +496,14 @@ class MainWindow(QMainWindow):
         q_image = QImage(vis_image.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
         pixmap = QPixmap.fromImage(q_image)
         
-        # 调整大小并显示
-        pixmap = self._resize_pixmap(pixmap)
-        self.image_label.setPixmap(pixmap)
-    
+        # Resize and display
+        resized_pixmap = self._resize_pixmap(pixmap)
+        self.image_label.setPixmap(resized_pixmap)
+        self.image_label.setAlignment(Qt.AlignCenter)
+
+        # Ensure current_image (from file) is None when camera is active
+        self.current_image = None 
+
     def on_open_settings(self):
         """
         处理打开设置按钮点击事件
@@ -499,6 +520,14 @@ class MainWindow(QMainWindow):
         # Or simply create a new modal dialog each time
         history_dialog = HistoryWindow(self) # Pass parent for modality if desired
         history_dialog.exec_() # Show as a modal dialog
+
+    def closeEvent(self, event):
+        """
+        处理窗口关闭事件，确保摄像头线程停止
+        """
+        logger.info("Close event received. Stopping camera...")
+        self.stop_camera() # Ensure camera is stopped before closing
+        super().closeEvent(event)
 
     def resizeEvent(self, event):
         """
@@ -554,3 +583,117 @@ class MainWindow(QMainWindow):
         
         # 清除处理结果
         self.processing_result = None
+        
+        # 如果摄像头在运行，停止它
+        if self.camera_running:
+             logger.info("Stopping camera because new image was loaded.")
+             self.stop_camera()
+
+    # --- Camera Methods ---
+
+    def start_camera(self):
+        """启动摄像头捕获线程"""
+        if self.camera_running:
+            logger.warning("Camera already running.")
+            return
+        
+        # 如果有加载的静态图像，清除它
+        if self.current_image:
+            self.current_image = None
+            self.image_label.setText("启动摄像头...") # Placeholder text
+            self.recognize_button.setEnabled(False) # Disable recognition for live feed
+
+        logger.info(f"Starting camera thread for index {self.camera_index}...")
+        self.camera_thread = QThread()
+        self.camera_worker = CameraWorker(self.camera_index)
+        self.camera_worker.moveToThread(self.camera_thread)
+
+        # Connect signals
+        self.camera_worker.frame_ready.connect(self.update_frame)
+        self.camera_worker.error_occurred.connect(self.handle_camera_error)
+        self.camera_worker.camera_opened.connect(self.update_camera_status)
+        self.camera_thread.started.connect(self.camera_worker.run)
+        # Ensure worker cleans up properly when thread finishes
+        self.camera_thread.finished.connect(self.camera_worker.deleteLater)
+        self.camera_thread.finished.connect(self.camera_thread.deleteLater)
+
+        self.camera_thread.start()
+        # Note: self.camera_running will be set by update_camera_status signal
+
+    def stop_camera(self):
+        """停止摄像头捕获线程"""
+        if not self.camera_thread or not self.camera_worker or not self.camera_running:
+            # logger.debug("Stop camera called but not running or already stopped.")
+            return # Exit if not running or already stopped
+
+        logger.info("Stopping camera thread...")
+        self.camera_worker.stop() # Signal worker to stop
+        
+        # Give the thread time to finish - adjust timeout as needed
+        if self.camera_thread.isRunning():
+            logger.debug("Waiting for camera thread to finish...")
+            if not self.camera_thread.wait(2000): # Wait 2 seconds
+                 logger.warning("Camera thread did not finish cleanly. Terminating.")
+                 self.camera_thread.terminate() # Force terminate if stuck
+                 self.camera_thread.wait() # Wait after termination
+            else:
+                 logger.debug("Camera thread finished successfully.")
+        else:
+             logger.debug("Camera thread was not running when stop was called.")
+
+        # Explicitly set running state false *after* confirming thread stop
+        self.camera_running = False
+        logger.info("Camera thread stopped and resources released.")
+
+        # Reset image label to initial state if needed
+        self.image_label.setText("请拖拽图片到此处或点击“上传图像”按钮")
+        self.image_label.setStyleSheet("background-color: #f0f0f0; color: gray;")
+        self.cv_image = None # Clear the cv_image
+
+    def update_frame(self, frame: np.ndarray):
+        """接收摄像头帧并更新UI"""
+        # logger.debug("Received frame from camera.") # DEBUG log
+        try:
+            # Keep a reference to the OpenCV image
+            self.cv_image = frame 
+
+            # Convert frame for display
+            rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb_image.shape
+            bytes_per_line = ch * w
+            qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888) # Removed .rgbSwapped()
+            pixmap = QPixmap.fromImage(qt_image)
+            
+            # Resize and display
+            resized_pixmap = self._resize_pixmap(pixmap)
+            self.image_label.setPixmap(resized_pixmap)
+            self.image_label.setAlignment(Qt.AlignCenter)
+
+            # Ensure current_image (from file) is None when camera is active
+            self.current_image = None 
+
+        except Exception as e:
+            logger.error(f"Error updating frame: {e}")
+            # Optionally stop camera on error?
+            # self.stop_camera()
+            # self.handle_camera_error(f"处理帧时出错: {e}")
+
+    def handle_camera_error(self, error_message: str):
+        """处理来自CameraWorker的错误信号"""
+        logger.error(f"Camera Error: {error_message}")
+        QMessageBox.critical(self, "摄像头错误", error_message)
+        # Ensure UI reflects stopped state even if stop_camera wasn't fully completed due to error
+        self.camera_running = False # Force state update
+
+    def update_camera_status(self, opened: bool):
+        """更新摄像头状态标签和按钮"""
+        self.camera_running = opened
+        if opened:
+            logger.info("Camera successfully opened.")
+            self.recognize_button.setEnabled(False) # Disable recognition during live feed
+            self.upload_button.setEnabled(True) # Keep upload ENABLED during live feed
+        else:
+            logger.info("Camera is not running or failed to open.")
+            # Enable recognize button ONLY if a static image is loaded
+            self.recognize_button.setEnabled(self.current_image is not None)
+            self.upload_button.setEnabled(True) # Re-enable upload
