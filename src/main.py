@@ -8,7 +8,16 @@ CheckCheck 导管喷码自动核对系统 - 主程序入口
 
 import sys
 import os
+import logging
 from PyQt5.QtWidgets import QApplication
+
+# 配置日志记录
+logging.basicConfig(
+    level=logging.DEBUG, 
+    format='%(asctime)s - %(levelname)s - %(name)s:%(lineno)d - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logging.debug("Logging configured. Application starting...")
 
 # 确保可以导入其他模块
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -33,7 +42,8 @@ def main():
     window.show()
     
     # 进入应用程序主循环
-    sys.exit(app.exec_())
+    exit_code = app.exec_()
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
@@ -41,5 +51,6 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         print(f"程序启动错误: {e}")
+        logging.exception("An unhandled exception occurred during application startup:")
         import traceback
         traceback.print_exc()

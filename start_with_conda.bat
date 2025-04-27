@@ -15,9 +15,11 @@ set KMP_DUPLICATE_LIB_OK=TRUE
 
 REM Run the application using conda run command in the checkcheck environment
 conda run -n checkcheck python src/main.py
+
+REM Check the exit code of the test command
 if %ERRORLEVEL% NEQ 0 (
-    echo Failed to run the application in conda environment.
-    echo Please run install_env.bat first to set up the environment.
+    echo Failed to run the application in conda environment 'checkcheck'.
+    echo Please check src/main.py and dependencies.
     pause
     exit /b 1
 )
