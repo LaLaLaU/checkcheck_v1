@@ -782,11 +782,13 @@ class MainWindow(QMainWindow):
             min_x = min(point[0] for point in box)
             min_y = min(point[1] for point in box)
             
-            # 添加文本标签，移除序号前缀
-            label = f"{text} ({confidence:.2f})"
+            # 分离文本和置信度
+            text_part = text
+            confidence_part = f"({confidence:.2f})"
             
-            # 计算文本背景
-            (text_width, text_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)
+            # 计算文本和置信度的尺寸
+            (text_width, text_height), _ = cv2.getTextSize(text_part, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)
+            (conf_width, conf_height), _ = cv2.getTextSize(confidence_part, cv2.FONT_HERSHEY_SIMPLEX, font_scale/2, 1)
             
             # 确保文本不会超出图片边界
             text_bg_min_x = int(min_x)
@@ -800,28 +802,31 @@ class MainWindow(QMainWindow):
             if text_bg_min_y < 0:
                 text_bg_min_y = int(max(point[1] for point in box)) + 10
                 
-            text_bg_max_x = text_bg_min_x + text_width
+            text_bg_max_x = text_bg_min_x + text_width + conf_width
             text_bg_max_y = text_bg_min_y + text_height + 10
             
             # 如果文本超出右边界，调整整个文本框位置
             if text_bg_max_x > width:
                 offset = text_bg_max_x - width
                 text_bg_min_x = max(0, text_bg_min_x - offset)
-                text_bg_max_x = text_bg_min_x + text_width
+                text_bg_max_x = text_bg_min_x + text_width + conf_width
                 
             # 如果文本超出下边界，调整到文本框上方
             if text_bg_max_y > height:
                 text_bg_min_y = int(min(point[1] for point in box)) - text_height - 20
                 text_bg_max_y = text_bg_min_y + text_height + 10
             
-            # 绘制文本背景（白色半透明）
-            overlay = marked_image.copy()
-            cv2.rectangle(overlay, (text_bg_min_x, text_bg_min_y), (text_bg_max_x, text_bg_max_y), (255, 255, 255), -1)
-            marked_image = cv2.addWeighted(overlay, 0.7, marked_image, 0.3, 0)
+            # 绘制纯白色背景（不再是半透明）
+            cv2.rectangle(marked_image, (text_bg_min_x, text_bg_min_y), (text_bg_max_x, text_bg_max_y), (255, 255, 255), -1)
             
-            # 绘制文本
-            cv2.putText(marked_image, label, (text_bg_min_x, text_bg_max_y - 10),
+            # 绘制主文本
+            cv2.putText(marked_image, text_part, (text_bg_min_x, text_bg_max_y - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, 2)
+            
+            # 绘制置信度（字体大小为主文本的一半）
+            conf_x = text_bg_min_x + text_width + 5  # 在主文本后留一点间距
+            cv2.putText(marked_image, confidence_part, (conf_x, text_bg_max_y - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale/2, (100, 100, 100), 1)  # 使用灰色显示置信度
         
         return marked_image
 
