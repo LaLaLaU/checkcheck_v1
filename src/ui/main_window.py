@@ -723,11 +723,10 @@ class MainWindow(QMainWindow):
             # Keep a reference to the OpenCV image
             self.cv_image = frame 
 
-            # Convert frame for display
-            rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            h, w, ch = rgb_image.shape
+            # Convert frame for display - 直接使用BGR格式，让rgbSwapped()处理颜色转换
+            h, w, ch = frame.shape
             bytes_per_line = ch * w
-            qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+            qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
             pixmap = QPixmap.fromImage(qt_image)
             
             # Resize and display
