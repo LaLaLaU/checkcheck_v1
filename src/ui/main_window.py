@@ -384,13 +384,7 @@ class MainWindow(QMainWindow):
         self.recognize_button.setEnabled(True)
         
         # 重置结果显示
-        self.label_text_result.setText("标牌文字: 等待识别...")
-        self.print_text_result.setText("喷码文字: 等待识别...")
-        self.comparison_result.setText("比对结果: 等待比对...")
-        self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
-        
-        # 清除处理结果
-        self.processing_result = None
+        self.clear_recognition_results()
         
         # 如果摄像头在运行，停止它
         if self.camera_running:
@@ -769,6 +763,11 @@ class MainWindow(QMainWindow):
             (255, 0, 0)     # 蓝色 - 其他文字
         ]
         
+        # 计算字体大小，根据图像尺寸调整
+        height, width = image.shape[:2]
+        font_scale = min(width, height) / 1000  # 根据图像尺寸调整字体大小
+        font_scale = max(0.5, min(font_scale, 1.5))  # 限制字体大小在0.5到1.5之间
+        
         # 绘制每个文本框
         for i, (box, text, confidence, _) in enumerate(text_boxes):
             # 确定颜色索引
@@ -785,8 +784,22 @@ class MainWindow(QMainWindow):
             
             # 添加文本标签，移除序号前缀
             label = f"{text} ({confidence:.2f})"
+            
+            # 计算文本背景
+            (text_width, text_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)
+            text_bg_min_x = int(min_x)
+            text_bg_min_y = int(min_y) - text_height - 10
+            text_bg_max_x = text_bg_min_x + text_width
+            text_bg_max_y = text_bg_min_y + text_height + 10
+            
+            # 绘制文本背景（白色半透明）
+            overlay = marked_image.copy()
+            cv2.rectangle(overlay, (text_bg_min_x, text_bg_min_y), (text_bg_max_x, text_bg_max_y), (255, 255, 255), -1)
+            marked_image = cv2.addWeighted(overlay, 0.7, marked_image, 0.3, 0)
+            
+            # 绘制文本
             cv2.putText(marked_image, label, (int(min_x), int(min_y) - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, 2)
         
         return marked_image
 
@@ -865,10 +878,7 @@ class MainWindow(QMainWindow):
         self.recognize_button.setEnabled(True)
         
         # 重置结果显示
-        self.label_text_result.setText("标牌文字: 等待识别...")
-        self.print_text_result.setText("喷码文字: 等待识别...")
-        self.comparison_result.setText("比对结果: 等待比对...")
-        self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
+        self.clear_recognition_results()
         
         # 清除处理结果
         self.processing_result = None
@@ -1052,6 +1062,9 @@ class MainWindow(QMainWindow):
         if self.camera_running:
             return
             
+        # 清空识别结果
+        self.clear_recognition_results()
+        
         # 清除当前图像显示
         self.image_label.clear()
         self.image_label.setText("正在启动相机...")
@@ -1075,6 +1088,9 @@ class MainWindow(QMainWindow):
 
     def switch_to_image_mode(self):
         """切换到图片识别模式"""
+        # 清空识别结果
+        self.clear_recognition_results()
+        
         # 停止摄像头
         self.stop_camera()
         
@@ -1089,9 +1105,20 @@ class MainWindow(QMainWindow):
     def resume_camera(self):
         """恢复相机"""
         self.pause_camera_updates = False
+        self.clear_recognition_results()
+        
         self.switch_mode_button.setText(" 切换到图片")
         try:
             self.switch_mode_button.clicked.disconnect()
         except TypeError:
             pass  # 如果没有连接的信号，忽略错误
         self.switch_mode_button.clicked.connect(self.switch_to_image_mode)
+
+    def clear_recognition_results(self):
+        """清空识别结果框"""
+        self.label_text_result.setText("标牌文字: 等待识别...")
+        self.print_text_result.setText("喷码文字: 等待识别...")
+        self.comparison_result.setText("比对结果: 等待比对...")
+        self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
+        # 清除处理结果
+        self.processing_result = None
