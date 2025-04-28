@@ -29,9 +29,57 @@
 
 **实施状态**: 已解决
 
-## 待解决问题
+### 3. 识别内容显示可读性问题 
 
-### 1. 文本区分策略不合理
+**问题描述**:
+主页面识别内容缺乏视觉区分，需要在图像上直接标记识别到的文字区域。
+
+**解决方案**:
+1. 添加了 `_draw_text_boxes` 方法，用于在图像上绘制文本框和标签
+2. 在相机模式和静态图片模式下的识别过程中，都添加了绘制文本框的代码
+3. 使用不同颜色区分不同类型的文本（绿色表示标牌文字，红色表示喷码文字）
+4. 在每个文本框旁边显示文本内容和置信度
+
+具体实现：
+```python
+def _draw_text_boxes(self, image, text_boxes):
+    """在图像上绘制文本框"""
+    if image is None or not text_boxes:
+        return image
+        
+    # 创建图像副本，避免修改原图
+    marked_image = image.copy()
+    
+    # 为不同类型的文本设置不同颜色
+    colors = [
+        (0, 255, 0),    # 绿色 - 标牌文字
+        (0, 0, 255),    # 红色 - 喷码文字
+        (255, 0, 0)     # 蓝色 - 其他文字
+    ]
+    
+    # 绘制每个文本框
+    for i, (box, text, confidence, _) in enumerate(text_boxes):
+        # 确定颜色索引
+        color_idx = i % len(colors) if i < 2 else 2
+        color = colors[color_idx]
+        
+        # 绘制文本框
+        points = np.array(box).astype(np.int32).reshape((-1, 1, 2))
+        cv2.polylines(marked_image, [points], True, color, 2)
+        
+        # 添加文本标签
+        label = f"{i+1}: {text} ({confidence:.2f})"
+        min_x = min(point[0] for point in box)
+        min_y = min(point[1] for point in box)
+        cv2.putText(marked_image, label, (int(min_x), int(min_y) - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    
+    return marked_image
+```
+
+**实施状态**: 已解决
+
+### 4. 文本区分策略不合理
 
 **问题描述**: 
 当前代码简单地根据文本框Y坐标位置区分上下文本（标牌/喷码），这种方法不够灵活，无法适应不同图像布局，特别是标牌竖放时完全无法区分。
@@ -69,71 +117,6 @@ self.print_text_combo = QComboBox()
 for text, _ in all_detected_texts:
     self.label_text_combo.addItem(text)
     self.print_text_combo.addItem(text)
-```
-
-**实施状态**: 待解决
-
-### 2. 识别内容显示可读性问题
-
-**问题描述**:
-主页面识别内容虽然已添加基本样式，但仍缺乏足够的视觉区分，需要进一步提高可读性。
-
-**原因分析**:
-当前添加的样式可能不够明显：
-```python
-self.result_style = """
-QLabel {
-    border: 1px solid #cccccc;
-    border-radius: 4px;
-    padding: 8px;
-    background-color: #f8f8f8;
-    margin: 2px;
-    font-size: 12pt;
-}
-"""
-```
-
-**解决方案**:
-1. 增强边框和背景对比度
-2. 为不同类型的结果添加不同的视觉样式
-3. 考虑使用QFrame嵌套或更明显的分隔线
-4. 示例改进样式：
-```python
-self.label_text_style = """
-QLabel {
-    border: 2px solid #4a86e8;
-    border-radius: 6px;
-    padding: 10px;
-    background-color: #e6f0ff;
-    margin: 4px;
-    font-size: 13pt;
-    font-weight: bold;
-}
-"""
-
-self.print_text_style = """
-QLabel {
-    border: 2px solid #6aa84f;
-    border-radius: 6px;
-    padding: 10px;
-    background-color: #e6ffe6;
-    margin: 4px;
-    font-size: 13pt;
-    font-weight: bold;
-}
-"""
-
-self.comparison_style = """
-QLabel {
-    border: 2px solid #cc0000;
-    border-radius: 6px;
-    padding: 10px;
-    background-color: #fff0f0;
-    margin: 4px;
-    font-size: 13pt;
-    font-weight: bold;
-}
-"""
 ```
 
 **实施状态**: 待解决

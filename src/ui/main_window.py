@@ -442,6 +442,32 @@ class MainWindow(QMainWindow):
             if results is None: # Check if OCR itself failed
                 raise RuntimeError("OCR 处理返回失败 (None)")
             
+            # 提取文本和位置信息
+            text_with_positions = []
+            if results and results[0]:
+                for line in results[0]:
+                    if len(line) >= 2 and isinstance(line[1], tuple) and len(line[1]) >= 2:
+                        box = line[0]  # 文本框坐标
+                        text = line[1][0]  # 文本内容
+                        confidence = line[1][1]  # 置信度
+                        
+                        # 计算文本框中心点y坐标，用于判断上下位置
+                        center_y = sum(point[1] for point in box) / len(box)
+                        
+                        text_with_positions.append((box, text, confidence, center_y))
+            
+            # 在图像上绘制文本框
+            if text_with_positions:
+                marked_image = self._draw_text_boxes(self.cv_image.copy(), text_with_positions)
+                
+                # 将标记后的图像转换为QPixmap并显示
+                h, w, ch = marked_image.shape
+                bytes_per_line = ch * w
+                qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+                pixmap = QPixmap.fromImage(qt_image)
+                pixmap = self._resize_pixmap(pixmap)
+                self.image_label.setPixmap(pixmap)
+            
             # --- Placeholder for actual result parsing --- 
             # You need to implement logic here to find the label and print text
             # based on the 'results' structure returned by your ocr_processor.ocr()
@@ -542,6 +568,17 @@ class MainWindow(QMainWindow):
                     self.comparison_result.setText("比对结果: <无法比对>")
                     self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.fail_background_color))
                     return
+                
+                # 在图像上绘制文本框
+                marked_image = self._draw_text_boxes(self.cv_image.copy(), text_with_positions)
+                
+                # 将标记后的图像转换为QPixmap并显示
+                h, w, ch = marked_image.shape
+                bytes_per_line = ch * w
+                qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+                pixmap = QPixmap.fromImage(qt_image)
+                pixmap = self._resize_pixmap(pixmap)
+                self.image_label.setPixmap(pixmap)
                 
                 # 按y坐标排序，区分上下文本
                 text_with_positions.sort(key=lambda x: x[3])
@@ -668,6 +705,52 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Exception during OCR processing: {e}", exc_info=True)
             return None
+
+
+    def _draw_text_boxes(self, image, text_boxes):
+        """
+        在图像上绘制文本框
+        
+        Args:
+            image: OpenCV格式的图像
+            text_boxes: 文本框列表，每个元素包含 (box, text, confidence)
+        
+        Returns:
+            带有文本框标记的图像
+        """
+        if image is None or not text_boxes:
+            return image
+            
+        # 创建图像副本，避免修改原图
+        marked_image = image.copy()
+        
+        # 为不同类型的文本设置不同颜色
+        colors = [
+            (0, 255, 0),    # 绿色 - 标牌文字
+            (0, 0, 255),    # 红色 - 喷码文字
+            (255, 0, 0)     # 蓝色 - 其他文字
+        ]
+        
+        # 绘制每个文本框
+        for i, (box, text, confidence, _) in enumerate(text_boxes):
+            # 确定颜色索引
+            color_idx = i % len(colors) if i < 2 else 2
+            color = colors[color_idx]
+            
+            # 绘制文本框
+            points = np.array(box).astype(np.int32).reshape((-1, 1, 2))
+            cv2.polylines(marked_image, [points], True, color, 2)
+            
+            # 计算文本框左上角坐标，用于放置文本标签
+            min_x = min(point[0] for point in box)
+            min_y = min(point[1] for point in box)
+            
+            # 添加文本标签
+            label = f"{i+1}: {text} ({confidence:.2f})"
+            cv2.putText(marked_image, label, (int(min_x), int(min_y) - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        return marked_image
 
 
 # --- UI Setup and Event Handlers ---
