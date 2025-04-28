@@ -137,10 +137,12 @@ class MainWindow(QMainWindow):
         self.default_groupbox_background = "transparent"
 
         # 初始化数据库
+        from src.utils.database_manager import init_db
         try:
             init_db()
+            logger.info("Database initialized successfully")
         except Exception as e:
-            QMessageBox.critical(self, "数据库错误", f"无法初始化历史记录数据库: {e}")
+            logger.error(f"Failed to initialize database: {e}", exc_info=True)
         
         # 设置UI
         self._setup_ui()
@@ -291,6 +293,27 @@ class MainWindow(QMainWindow):
         # Adjust these values as needed
         splitter.setSizes([int(self.height() * 0.7), int(self.height() * 0.3)]) 
 
+        # 设置结果文本样式
+        self.result_style = """
+        QLabel {
+            border: 1px solid #cccccc;
+            border-radius: 4px;
+            padding: 8px;
+            background-color: #f8f8f8;
+            margin: 2px;
+            font-size: 12pt;
+        }
+        """
+        
+        # 用于控制结果框背景颜色的基础样式
+        self.base_groupbox_style = "QGroupBox {{ border: 1px solid gray; border-radius: 5px; margin-top: 0.5em; background-color: {background_color}; }} QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; }}"
+        
+        # 应用样式
+        self.label_text_result.setStyleSheet(self.result_style)
+        self.print_text_result.setStyleSheet(self.result_style)
+        self.comparison_result.setStyleSheet(self.result_style)
+        self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
+        
         # 应用简单的 QSS 样式 (Keep existing styles)
         self.setStyleSheet("""
             QMainWindow { background-color: #ffffff; }
@@ -302,11 +325,6 @@ class MainWindow(QMainWindow):
             QPushButton:disabled { background-color: #e0e0e0; color: #a0a0a0; }
             QLabel#image_label { background-color: #f0f0f0; border: 1px solid #cccccc; }
         """)
-        
-        self.base_groupbox_style = "QGroupBox {{ border: 1px solid gray; border-radius: 5px; margin-top: 0.5em; background-color: {background_color}; }} QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; }}"
-        
-        # 设置初始默认背景（可能会被全局样式覆盖，但没关系，处理时会重新设置）
-        self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
         
         # Connect the drop signal
         self.image_label.fileDropped.connect(self._load_image)
@@ -400,11 +418,11 @@ class MainWindow(QMainWindow):
         if not self.ocr_processor:
             QMessageBox.critical(self, "错误", "OCR 处理器未初始化或加载失败。")
             return
-        if not self.current_image or not os.path.exists(self.current_image):
+        if not hasattr(self, 'image_path') or not self.image_path or not os.path.exists(self.image_path):
             QMessageBox.warning(self, "无图像", "请先上传有效的图像文件。")
             return
 
-        logger.info(f"Starting recognition for static image: {self.current_image}")
+        logger.info(f"Starting recognition for static image: {self.image_path}")
         self.recognize_button.setEnabled(False)
         self.upload_button.setEnabled(False) # Disable upload during recognition
         # Update result displays with 'processing' status
@@ -414,13 +432,12 @@ class MainWindow(QMainWindow):
         QApplication.processEvents() # Allow UI to update
 
         try:
-            # Load image data from path using OpenCV
-            img_data = cv2.imread(self.current_image)
-            if img_data is None:
-                 raise ValueError("无法使用 OpenCV 加载图像文件")
+            # 使用已加载的OpenCV图像数据
+            if self.cv_image is None:
+                raise ValueError("无法使用已加载的图像")
 
             # Perform OCR using the common method
-            results = self._perform_ocr(img_data)
+            results = self._perform_ocr(self.cv_image)
 
             if results is None: # Check if OCR itself failed
                 raise RuntimeError("OCR 处理返回失败 (None)")
@@ -438,18 +455,37 @@ class MainWindow(QMainWindow):
                  print_text = " ".join(all_texts[1:]) if len(all_texts) > 1 else "(无)" 
             
             # --- Placeholder for comparison logic --- 
-            comparison = "比对逻辑未实现" 
             if label_text != "未识别" and print_text != "未识别":
-                 # Add comparison logic here
-                 pass 
+                # 计算相似度
+                import difflib
+                similarity = difflib.SequenceMatcher(None, label_text, print_text).ratio()
+                similarity_percent = int(similarity * 100)
+                
+                # 判断是否通过 (100%相似度才通过)
+                if similarity_percent == 100:
+                    comparison = f"<span style='color:green; font-weight:bold;'>✓ 通过</span> (相似度: {similarity_percent}%)"
+                    background_color = self.pass_background_color
+                else:
+                    comparison = f"<span style='color:red; font-weight:bold;'>✗ 不通过</span> (相似度: {similarity_percent}%)"
+                    background_color = self.fail_background_color
+            else:
+                comparison = "<span style='color:orange; font-weight:bold;'>? 无法比对</span>"
+                background_color = self.fail_background_color
             # --------------------------------------------
 
             self.label_text_result.setText(f"标牌文字: {label_text}")
             self.print_text_result.setText(f"喷码文字: {print_text}")
             self.comparison_result.setText(f"比对结果: {comparison}")
-            logger.info("Static image recognition complete.")
-            # Add record to database
-            # self.add_record(self.current_image, label_text, print_text, comparison)
+            self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=background_color))
+            
+            # 添加记录到数据库
+            if label_text != "未识别" and print_text != "未识别":
+                try:
+                    # 使用原始上传的图像路径保存记录
+                    self.add_record(self.image_path, label_text, print_text, comparison)
+                    logger.info(f"Recognition record saved to database for: {self.image_path}")
+                except Exception as e:
+                    logger.error(f"Failed to save record: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Error during static image recognition: {e}", exc_info=True)
@@ -563,12 +599,20 @@ class MainWindow(QMainWindow):
                 logger.info("Camera frame recognition complete.")
                 
                 # 保存记录到数据库 (可选)
-                # 如果需要保存图像，可以使用以下代码
-                # from datetime import datetime
-                # filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-                # save_path = os.path.join('path_to_save_captures', filename)
-                # cv2.imwrite(save_path, self.cv_image)
-                # self.add_record(save_path, label_text, print_text, result_text)
+                if label_text != "<未识别到标牌文字>" and print_text != "<未识别到喷码文字>":
+                    try:
+                        # 保存当前帧
+                        from datetime import datetime
+                        capture_dir = self._ensure_capture_dir()
+                        filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                        save_path = os.path.join(capture_dir, filename)
+                        cv2.imwrite(save_path, self.cv_image)
+                        
+                        # 保存记录
+                        self.add_record(save_path, label_text, print_text, result_text)
+                        logger.info(f"Camera frame recognition record saved to: {save_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to save camera record: {e}", exc_info=True)
 
             except Exception as e:
                  logger.error(f"Error during camera frame recognition: {e}", exc_info=True)
@@ -822,3 +866,32 @@ class MainWindow(QMainWindow):
             # Enable recognize button ONLY if a static image is loaded
             self.recognize_button.setEnabled(self.current_image is not None)
             self.upload_button.setEnabled(True) # Re-enable upload
+
+    def _ensure_capture_dir(self):
+        """确保捕获图像的保存目录存在"""
+        capture_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'captures')
+        os.makedirs(capture_dir, exist_ok=True)
+        return capture_dir
+    
+    def add_record(self, image_path, sign_text, print_text, result_text):
+        """将识别结果保存到数据库"""
+        try:
+            # 从比对结果中提取相似度
+            import re
+            similarity = 0.0
+            if "相似度:" in result_text:
+                match = re.search(r'相似度: (\d+)%', result_text)
+                if match:
+                    similarity = float(match.group(1)) / 100
+            
+            # 提取结果（通过/不通过）
+            result = "通过" if "通过" in result_text else "不通过"
+            
+            # 调用数据库函数保存记录
+            from src.utils.database_manager import add_history_record
+            add_history_record(image_path, sign_text, print_text, similarity, result)
+            logger.info(f"Record saved: {image_path}, {sign_text}, {print_text}, {similarity}, {result}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save record: {e}")
+            return False
