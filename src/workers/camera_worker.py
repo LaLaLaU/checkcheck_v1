@@ -18,6 +18,7 @@ class CameraWorker(QObject):
         logger.info(f"CameraWorker initialized with camera index: {self.camera_index}")
 
     def run(self):
+        logger.info(f"CameraWorker thread started ({QThread.currentThreadId()}). Opening camera {self.camera_index}...")
         self._running = True
         logger.info(f"Attempting to open camera {self.camera_index}...")
         # 尝试不同的API Preference
@@ -39,11 +40,24 @@ class CameraWorker(QObject):
             self.error_occurred.emit(error_msg)
             self.camera_opened.emit(False)
             self._running = False
+            logger.info("CameraWorker run loop finished. Releasing resources...")
+            if self.cap and self.cap.isOpened():
+                logger.info("Releasing camera capture...")
+                self.cap.release()
+                logger.info("Camera capture released.")
+            else:
+                logger.info("Camera capture was not open or already released.")
+            logger.info("Emitting finished signal...")
+            # self.finished.emit() # No finished signal in original code
+            logger.info("Finished signal emitted. CameraWorker run() completed.")
             return
 
         logger.info(f"Camera {self.camera_index} opened successfully. Starting frame capture loop.")
         while self._running:
             ret, frame = self.cap.read()
+            if not self._running: # Double-check after blocking read
+                logger.debug("Loop condition false after cap.read()")
+                break 
             if not ret:
                 logger.warning(f"Warning: Could not read frame from camera {self.camera_index}. Stopping capture.")
                 # Maybe emit an error signal here too?
@@ -57,17 +71,28 @@ class CameraWorker(QObject):
             # Use QThread.msleep for better integration with Qt event loop
             QThread.msleep(30) # Adjust delay as needed (e.g., 30ms ~ 33fps)
 
+            # Give the event loop a chance to process signals (like stop signal)
+            # Important if frame processing takes time later.
+            QThread.msleep(1) # Small sleep to yield thread
+
         logger.info(f"Stopping camera {self.camera_index} capture.")
         if self.cap:
+            logger.info("Releasing camera capture...")
             self.cap.release()
-            logger.info(f"Camera {self.camera_index} released.")
+            logger.info("Camera capture released.")
+        else:
+            logger.info("Camera capture was not open or already released.")
         self.cap = None # Ensure cap is None after release
         self._running = False # Ensure running flag is false
-        self.camera_opened.emit(False) # Indicate camera is no longer open
+        logger.info("Emitting finished signal...")
+        # self.finished.emit() # No finished signal in original code
+        logger.info("Finished signal emitted. CameraWorker run() completed.")
 
     def stop(self):
-        logger.info(f"Received stop signal for camera {self.camera_index}.")
+        logger.info("CameraWorker stop() called. Setting _running to False.")
         self._running = False
+        logger.info("_running is now False.")
+        logger.info("CameraWorker stop() completed.")
 
     def is_running(self):
         return self._running

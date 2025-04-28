@@ -24,6 +24,13 @@ from src.ui.history_window import HistoryWindow
 from src.workers.camera_worker import CameraWorker
 import logging
 
+# Attempt to import the OCR processor
+try:
+    from src.processing.ocr_processor import PaddleOcrProcessor # Adjust path if needed
+except ImportError as e:
+    logging.error(f"Could not import PaddleOcrProcessor: {e}. OCR functionality will be disabled.")
+    PaddleOcrProcessor = None # Set to None if import fails
+
 logger = logging.getLogger(__name__)
 
 # --- Custom Widget for Drag and Drop --- 
@@ -122,6 +129,7 @@ class MainWindow(QMainWindow):
         self.camera_worker = None      # Worker for camera capture
         self.camera_running = False    # Flag for camera state
         self.camera_index = 1 # TODO: Make configurable
+        self.ocr_processor = None # OCR 处理器
 
         # 定义颜色常量
         self.pass_background_color = "#e0ffe0" # Light green for pass
@@ -139,6 +147,8 @@ class MainWindow(QMainWindow):
         
         # 初始化图像处理器
         self._init_processor()
+        # 初始化OCR处理器
+        self._init_ocr_processor()
         # 初始化相机（但不启动）
         self._init_camera()
         # 自动启动摄像头
@@ -163,6 +173,20 @@ class MainWindow(QMainWindow):
             progress.close()
             QMessageBox.critical(self, "错误", f"初始化OCR引擎失败: {str(e)}")
         
+    def _init_ocr_processor(self):
+        """Initialize the OCR processor."""
+        if PaddleOcrProcessor:
+            try:
+                self.ocr_processor = PaddleOcrProcessor()
+                logger.info("OCR Processor initialized successfully.")
+            except Exception as e:
+                logger.error(f"Failed to initialize OCR Processor: {e}")
+                QMessageBox.critical(self, "初始化错误", f"初始化 OCR 处理器失败: {e}")
+        else:
+             logger.warning("PaddleOcrProcessor not available. OCR functionality disabled.")
+             # Optionally show a warning to the user
+             # QMessageBox.warning(self, "警告", "OCR 模块未找到或加载失败，识别功能将不可用。")
+
     def _init_camera(self):
         """
         初始化相机相关设置（如果需要）
@@ -237,13 +261,13 @@ class MainWindow(QMainWindow):
         settings_icon = self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
 
         self.upload_button = QPushButton(upload_icon, " 上传图像")
-        self.upload_button.setToolTip("从文件选择图像")
+        self.upload_button.setToolTip("从本地文件上传图像")
         self.upload_button.clicked.connect(self.on_upload_image)
         button_layout.addWidget(self.upload_button)
 
-        self.recognize_button = QPushButton(recognize_icon, " 开始识别")
-        self.recognize_button.setToolTip("对当前加载的图像进行识别和比对")
-        self.recognize_button.clicked.connect(self.on_start_recognition)
+        self.recognize_button = QPushButton(recognize_icon, " 开始识别") 
+        self.recognize_button.setToolTip("对当前显示的图像进行识别")
+        self.recognize_button.clicked.connect(self._recognize_current_frame) # New connection for live/static
         self.recognize_button.setEnabled(False) # Initially disabled
         button_layout.addWidget(self.recognize_button)
 
@@ -373,136 +397,176 @@ class MainWindow(QMainWindow):
         """
         处理开始识别按钮点击事件
         """
-        # 检查是否已加载图像
-        if not self.cv_image:
-            QMessageBox.warning(self, "警告", "请先加载图像")
+        if not self.ocr_processor:
+            QMessageBox.critical(self, "错误", "OCR 处理器未初始化或加载失败。")
+            return
+        if not self.current_image or not os.path.exists(self.current_image):
+            QMessageBox.warning(self, "无图像", "请先上传有效的图像文件。")
             return
 
-        # 检查摄像头是否正在运行
-        if self.camera_running:
-             QMessageBox.warning(self, "警告", "请先停止摄像头，再进行识别。")
-             return
-
-        # 检查处理器是否初始化
-        if self.processor is None:
-            QMessageBox.critical(self, "错误", "OCR引擎未初始化")
-            return
-
-        # 禁用按钮并显示状态
+        logger.info(f"Starting recognition for static image: {self.current_image}")
         self.recognize_button.setEnabled(False)
-        self.recognize_button.setText("正在处理...")
-        QApplication.processEvents() # 确保UI更新
-        
-        try:
-            # 处理图像
-            self.processing_result = self.processor.process_image(self.cv_image)
-            
-            # 更新UI显示结果
-            self._update_results_display()
-            
-            # 显示处理后的图像
-            self._display_processed_image()
-            
-            # 保存历史记录
-            if self.processing_result:
-                try:
-                    # 提取原始文本和结果 - **使用原始文本字段**
-                    # !! 请确保 'label_text' 和 'print_text' 是 processor 返回结果中包含原始文本的正确键名 !!
-                    sign_text_raw = self.processing_result.get('label_text', "") # <--- Correct key for label text
-                    print_text_raw = self.processing_result.get('print_text', "") # <--- 使用原始喷码文本
-                    similarity = self.processing_result.get('similarity', 0.0)
-                    result_str = "通过" if abs(similarity - 1.0) < 1e-6 else "不通过"
-                    
-                    # Check if this exact result already exists in history
-                    record_exists = check_history_exists(sign_text_raw, print_text_raw, similarity, result_str)
-                    
-                    # Add record to history database (using plain text)
-                    add_history_record(
-                        self.image_path,
-                        sign_text_raw,
-                        print_text_raw,
-                        similarity,
-                        result_str
-                    )
-                    
-                    # Append existence note if necessary
-                    if record_exists:
-                        self.comparison_result.setText(self.comparison_result.text() + " <span style='color: gray; font-size: 9pt;'>(已存在该条记录)</span>")
-                except Exception as e:
-                    QMessageBox.warning(self, "历史记录错误", f"无法保存历史记录: {e}")
-                    # 或者记录日志
-                    print(f"Error saving history: {e}")
-        
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"图像处理失败: {str(e)}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            # 恢复按钮状态
-            self.recognize_button.setEnabled(True)
-            self.recognize_button.setText("开始识别")
-    
-    def _update_results_display(self):
-        """
-        更新结果显示
-        """
-        if not self.processing_result:
-            return
-        
-        # 获取结果
-        html_label_text = self.processing_result.get('html_label_text', "")
-        html_print_text = self.processing_result.get('html_print_text', "")
-        comparison = self.processing_result.get('comparison', {})
-        
-        # 更新标牌文字 (使用HTML)
-        self.label_text_result.setText(f"标牌文字: {html_label_text}")
-        self.label_text_result.setTextFormat(Qt.RichText) # 确保能解析HTML
-        
-        # 更新喷码文字 (使用HTML)
-        self.print_text_result.setText(f"喷码文字: {html_print_text}")
-        self.print_text_result.setTextFormat(Qt.RichText) # 确保能解析HTML
-        
-        # 更新比对结果
-        similarity = comparison.get('similarity', 0.0)
-        
-        result_text = f"相似度 {similarity:.2%}" # 只显示相似度
-        
-        # 仅在 100% 相似时判断为通过
-        if abs(similarity - 1.0) < 1e-6: # 使用浮点数比较
-            result_text += ", <b><span style='color: green;'>✔ 通过</span></b>" # 添加 ✔ 图标
-            bg_color = self.pass_background_color
-        else:
-            result_text += ", <b><span style='color: red;'>✘ 不通过</span></b>" # 添加 ✘ 图标
-            bg_color = self.fail_background_color
- 
-        self.comparison_result.setText(result_text) # 使用 setText 更新 QLabel
- 
-        # Apply background color to the results groupbox
-        self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=bg_color))
- 
-    def _display_processed_image(self):
-        """
-        显示处理后的图像
-        """
-        if not self.processing_result or 'visualized_image' not in self.processing_result:
-            return
-        
-        # 获取处理后的图像
-        vis_image = self.processing_result['visualized_image']
-        
-        # 转换为QPixmap
-        height, width, channel = vis_image.shape
-        bytes_per_line = 3 * width
-        q_image = QImage(vis_image.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-        pixmap = QPixmap.fromImage(q_image)
-        
-        # Resize and display
-        resized_pixmap = self._resize_pixmap(pixmap)
-        self.image_label.setPixmap(resized_pixmap)
-        self.image_label.setAlignment(Qt.AlignCenter)
+        self.upload_button.setEnabled(False) # Disable upload during recognition
+        # Update result displays with 'processing' status
+        self.label_text_result.setText("标牌文字: [识别中...]")
+        self.print_text_result.setText("喷码文字: [识别中...]")
+        self.comparison_result.setText("比对结果: [处理中...]")
+        QApplication.processEvents() # Allow UI to update
 
-        # Ensure current_image (from file) is None when camera is active
-        self.current_image = None 
+        try:
+            # Load image data from path using OpenCV
+            img_data = cv2.imread(self.current_image)
+            if img_data is None:
+                 raise ValueError("无法使用 OpenCV 加载图像文件")
+
+            # Perform OCR using the common method
+            results = self._perform_ocr(img_data)
+
+            if results is None: # Check if OCR itself failed
+                raise RuntimeError("OCR 处理返回失败 (None)")
+            
+            # --- Placeholder for actual result parsing --- 
+            # You need to implement logic here to find the label and print text
+            # based on the 'results' structure returned by your ocr_processor.ocr()
+            # Example: Assuming results = [[box, (text, confidence)], ...]
+            all_texts = [line[1][0] for line in results[0]] if results and results[0] else [] 
+            label_text = "未识别" # Placeholder
+            print_text = "未识别" # Placeholder
+            if all_texts:
+                 # Simple example: Assign first line to label, rest to print? Or use location?
+                 label_text = all_texts[0]
+                 print_text = " ".join(all_texts[1:]) if len(all_texts) > 1 else "(无)" 
+            
+            # --- Placeholder for comparison logic --- 
+            comparison = "比对逻辑未实现" 
+            if label_text != "未识别" and print_text != "未识别":
+                 # Add comparison logic here
+                 pass 
+            # --------------------------------------------
+
+            self.label_text_result.setText(f"标牌文字: {label_text}")
+            self.print_text_result.setText(f"喷码文字: {print_text}")
+            self.comparison_result.setText(f"比对结果: {comparison}")
+            logger.info("Static image recognition complete.")
+            # Add record to database
+            # self.add_record(self.current_image, label_text, print_text, comparison)
+
+        except Exception as e:
+            logger.error(f"Error during static image recognition: {e}", exc_info=True)
+            QMessageBox.critical(self, "识别错误", f"处理静态图像时出错: {e}")
+            self.label_text_result.setText("标牌文字: 错误")
+            self.print_text_result.setText("喷码文字: 错误")
+            self.comparison_result.setText("比对结果: 错误")
+        finally:
+            self.recognize_button.setEnabled(True) # Re-enable recognize button
+            self.upload_button.setEnabled(True) # Re-enable upload button
+
+
+    def _setup_database(self):
+        pass
+
+    def _recognize_current_frame(self):
+        """Handles the click of the recognize button for both live and static images."""
+        if not self.ocr_processor:
+            QMessageBox.critical(self, "错误", "OCR 处理器未初始化或加载失败。")
+            return
+
+        if self.camera_running and self.cv_image is not None:
+            logger.info("Recognizing current camera frame...")
+            # Disable button during processing to prevent multiple clicks
+            self.recognize_button.setEnabled(False)
+            QApplication.processEvents() # Update UI
+            
+            try:
+                # Perform OCR on the current frame
+                results = self._perform_ocr(self.cv_image.copy()) # Use a copy to avoid race conditions
+                
+                if results is None:
+                     raise RuntimeError("OCR 处理返回失败 (None)")
+
+                # --- Placeholder for actual result parsing --- 
+                all_texts = [line[1][0] for line in results[0]] if results and results[0] else [] 
+                label_text = "未识别" # Placeholder
+                print_text = "未识别" # Placeholder
+                if all_texts:
+                     label_text = all_texts[0]
+                     print_text = " ".join(all_texts[1:]) if len(all_texts) > 1 else "(无)" 
+                # --- Placeholder for comparison logic --- 
+                comparison = "比对逻辑未实现"
+                # --------------------------------------------
+
+                self.label_text_result.setText(f"标牌文字: {label_text}")
+                self.print_text_result.setText(f"喷码文字: {print_text}")
+                self.comparison_result.setText(f"比对结果: {comparison}")
+                logger.info("Camera frame recognition complete.")
+                # Optionally add record for camera captures?
+                # filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                # cv2.imwrite(os.path.join('path_to_save_captures', filename), self.cv_image) # Save frame
+                # self.add_record(filename, label_text, print_text, comparison)
+
+            except Exception as e:
+                 logger.error(f"Error during camera frame recognition: {e}", exc_info=True)
+                 QMessageBox.critical(self, "识别错误", f"处理摄像头帧时出错: {e}")
+                 self.label_text_result.setText("标牌文字: 错误")
+                 self.print_text_result.setText("喷码文字: 错误")
+                 self.comparison_result.setText("比对结果: 错误")
+            finally:
+                 # Re-enable button only if camera is still running 
+                 # (it might have been stopped by uploading another image)
+                 if self.camera_running:
+                     self.recognize_button.setEnabled(True)
+                 
+        elif self.current_image:
+            logger.info(f"Recognizing static image: {self.current_image}")
+            # Call the method that handles static images
+            self.on_start_recognition()
+        else:
+            logger.warning("Recognize button clicked, but no image source available.")
+            QMessageBox.warning(self, "无法识别", "没有可识别的图像源。请确保摄像头运行或已上传图片。")
+
+
+    def _perform_ocr(self, image_data):
+        """Performs OCR using the initialized processor.
+
+        Args:
+            image_data (np.ndarray): The image data (OpenCV format, BGR).
+
+        Returns:
+            list: The OCR results from PaddleOCR, or None if error.
+                  Format assumption: [[box, (text, confidence)], ...]
+        """
+        if not self.ocr_processor:
+            logger.error("Attempted to perform OCR, but processor is not initialized.")
+            return None
+        if image_data is None:
+            logger.error("Attempted to perform OCR on None image data.")
+            return None
+
+        try:
+            logger.info("Calling OCR processor...")
+            start_time = 0
+            
+            # Adjust the call based on your PaddleOcrProcessor implementation
+            results = self.ocr_processor.ocr(image_data, cls=True) # Example call
+            
+            end_time = 0
+            logger.info(f"OCR processing took: {end_time - start_time} ms")
+            # logger.debug(f"OCR raw results: {results}") # Can be very verbose
+            
+            # Basic validation of results format (optional)
+            if results is None: # Some OCR engines might return None on failure
+                 logger.warning("OCR processor returned None.")
+                 return None
+            # Add more checks if needed based on expected structure
+                 
+            return results
+        except Exception as e:
+            logger.error(f"Exception during OCR processing: {e}", exc_info=True)
+            return None # Return None on exception
+
+
+
+# --- UI Setup and Event Handlers ---
 
     def on_open_settings(self):
         """
@@ -622,26 +686,28 @@ class MainWindow(QMainWindow):
 
     def stop_camera(self):
         """停止摄像头捕获线程"""
-        if not self.camera_thread or not self.camera_worker or not self.camera_running:
-            # logger.debug("Stop camera called but not running or already stopped.")
-            return # Exit if not running or already stopped
-
-        logger.info("Stopping camera thread...")
-        self.camera_worker.stop() # Signal worker to stop
-        
-        # Give the thread time to finish - adjust timeout as needed
-        if self.camera_thread.isRunning():
-            logger.debug("Waiting for camera thread to finish...")
-            if not self.camera_thread.wait(2000): # Wait 2 seconds
-                 logger.warning("Camera thread did not finish cleanly. Terminating.")
-                 self.camera_thread.terminate() # Force terminate if stuck
-                 self.camera_thread.wait() # Wait after termination
+        logger.info("Entering stop_camera...")
+        if self.camera_thread and self.camera_worker:
+            logger.info("Signaling CameraWorker to stop...")
+            self.camera_worker.stop()
+            logger.info("Signal sent. Quitting camera_thread...")
+            self.camera_thread.quit()
+            logger.info("Waiting for camera_thread to finish...")
+            # Wait for 5 seconds max, otherwise force termination? 
+            # wait() can block indefinitely if the thread doesn't terminate.
+            finished = self.camera_thread.wait(5000) # Wait up to 5000ms (5 seconds)
+            if finished:
+                logger.info("Camera thread finished gracefully.")
             else:
-                 logger.debug("Camera thread finished successfully.")
+                logger.warning("Camera thread did not finish within 5 seconds. It might be stuck.")
+                # Optionally, you could try termination here, but it's risky:
+                # logger.warning("Forcing thread termination...")
+                # self.camera_thread.terminate() # Use with caution!
+                # self.camera_thread.wait() # Wait again after terminate
         else:
-             logger.debug("Camera thread was not running when stop was called.")
+            logger.warning("stop_camera called but thread or worker was None.")
 
-        # Explicitly set running state false *after* confirming thread stop
+        # Explicitly set running state false *after* confirming thread stop (or timeout)
         self.camera_running = False
         logger.info("Camera thread stopped and resources released.")
 
@@ -661,7 +727,7 @@ class MainWindow(QMainWindow):
             rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb_image.shape
             bytes_per_line = ch * w
-            qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888) # Removed .rgbSwapped()
+            qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
             pixmap = QPixmap.fromImage(qt_image)
             
             # Resize and display
@@ -690,7 +756,7 @@ class MainWindow(QMainWindow):
         self.camera_running = opened
         if opened:
             logger.info("Camera successfully opened.")
-            self.recognize_button.setEnabled(False) # Disable recognition during live feed
+            self.recognize_button.setEnabled(True) # ENABLE recognition during live feed
             self.upload_button.setEnabled(True) # Keep upload ENABLED during live feed
         else:
             logger.info("Camera is not running or failed to open.")
