@@ -765,8 +765,8 @@ class MainWindow(QMainWindow):
         
         # 计算字体大小，根据图像尺寸调整
         height, width = image.shape[:2]
-        font_scale = min(width, height) / 1000  # 根据图像尺寸调整字体大小
-        font_scale = max(0.5, min(font_scale, 1.5))  # 限制字体大小在0.5到1.5之间
+        font_scale = min(width, height) / 500  # 增大字体大小1倍（从1000改为500）
+        font_scale = max(0.5, min(font_scale, 2.0))  # 调整上限从1.5到2.0
         
         # 绘制每个文本框
         for i, (box, text, confidence, _) in enumerate(text_boxes):
@@ -787,10 +787,32 @@ class MainWindow(QMainWindow):
             
             # 计算文本背景
             (text_width, text_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)
+            
+            # 确保文本不会超出图片边界
             text_bg_min_x = int(min_x)
             text_bg_min_y = int(min_y) - text_height - 10
+            
+            # 如果文本超出左边界，调整到左边界
+            if text_bg_min_x < 0:
+                text_bg_min_x = 0
+                
+            # 如果文本超出上边界，调整到文本框下方
+            if text_bg_min_y < 0:
+                text_bg_min_y = int(max(point[1] for point in box)) + 10
+                
             text_bg_max_x = text_bg_min_x + text_width
             text_bg_max_y = text_bg_min_y + text_height + 10
+            
+            # 如果文本超出右边界，调整整个文本框位置
+            if text_bg_max_x > width:
+                offset = text_bg_max_x - width
+                text_bg_min_x = max(0, text_bg_min_x - offset)
+                text_bg_max_x = text_bg_min_x + text_width
+                
+            # 如果文本超出下边界，调整到文本框上方
+            if text_bg_max_y > height:
+                text_bg_min_y = int(min(point[1] for point in box)) - text_height - 20
+                text_bg_max_y = text_bg_min_y + text_height + 10
             
             # 绘制文本背景（白色半透明）
             overlay = marked_image.copy()
@@ -798,7 +820,7 @@ class MainWindow(QMainWindow):
             marked_image = cv2.addWeighted(overlay, 0.7, marked_image, 0.3, 0)
             
             # 绘制文本
-            cv2.putText(marked_image, label, (int(min_x), int(min_y) - 10),
+            cv2.putText(marked_image, label, (text_bg_min_x, text_bg_max_y - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, 2)
         
         return marked_image
@@ -879,9 +901,6 @@ class MainWindow(QMainWindow):
         
         # 重置结果显示
         self.clear_recognition_results()
-        
-        # 清除处理结果
-        self.processing_result = None
         
         # 如果摄像头在运行，停止它
         if self.camera_running:
