@@ -477,6 +477,11 @@ class MainWindow(QMainWindow):
                 pixmap = QPixmap.fromImage(qt_image)
                 pixmap = self._resize_pixmap(pixmap)
                 self.image_label.setPixmap(pixmap)
+                
+                # 如果相机已经启动，则启用恢复相机按钮
+                if self.camera_running:
+                    self.pause_camera_updates = True
+                    self.resume_camera_button.setEnabled(True)
             
             # --- Placeholder for actual result parsing --- 
             # You need to implement logic here to find the label and print text
@@ -993,7 +998,8 @@ class MainWindow(QMainWindow):
                     similarity = float(match.group(1)) / 100
             
             # 提取结果（通过/不通过）
-            result = "通过" if "通过" in result_text else "不通过"
+            # 更精确地判断是否通过，检查是否包含"✓ 通过"而不是仅检查"通过"
+            result = "通过" if "✓ 通过" in result_text else "不通过"
             
             # 调用数据库函数保存记录
             from src.utils.database_manager import add_history_record
