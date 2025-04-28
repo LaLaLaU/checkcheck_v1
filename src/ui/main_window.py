@@ -274,11 +274,12 @@ class MainWindow(QMainWindow):
         self.recognize_button.setEnabled(False) # Initially disabled
         button_layout.addWidget(self.recognize_button)
 
-        self.resume_camera_button = QPushButton(" 恢复相机")
-        self.resume_camera_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-        self.resume_camera_button.setEnabled(False)  # 初始状态下禁用
-        self.resume_camera_button.clicked.connect(self.resume_camera)
-        button_layout.addWidget(self.resume_camera_button)
+        # 添加切换按钮，用于在图片识别和相机识别模式之间切换
+        self.switch_mode_button = QPushButton(" 切换到相机")
+        self.switch_mode_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.switch_mode_button.setToolTip("切换到相机识别模式")
+        self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
+        button_layout.addWidget(self.switch_mode_button)
 
         self.history_button = QPushButton(history_icon, " 历史记录") # Match screenshot text
         self.history_button.setToolTip("查看历史识别记录")
@@ -396,8 +397,13 @@ class MainWindow(QMainWindow):
              logger.info("Stopping camera because new image was loaded.")
              self.stop_camera()
         
-        # 禁用恢复相机按钮
-        self.resume_camera_button.setEnabled(False)
+        # 切换到图片模式
+        self.switch_mode_button.setText(" 切换到相机")
+        try:
+            self.switch_mode_button.clicked.disconnect()
+        except TypeError:
+            pass  # 如果没有连接的信号，忽略错误
+        self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
 
     def _resize_pixmap(self, pixmap):
         """
@@ -481,7 +487,12 @@ class MainWindow(QMainWindow):
                 # 如果相机已经启动，则启用恢复相机按钮
                 if self.camera_running:
                     self.pause_camera_updates = True
-                    self.resume_camera_button.setEnabled(True)
+                    self.switch_mode_button.setText(" 恢复相机")
+                    try:
+                        self.switch_mode_button.clicked.disconnect()
+                    except TypeError:
+                        pass  # 如果没有连接的信号，忽略错误
+                    self.switch_mode_button.clicked.connect(self.resume_camera)
             
             # --- Placeholder for actual result parsing --- 
             # You need to implement logic here to find the label and print text
@@ -609,7 +620,12 @@ class MainWindow(QMainWindow):
             
             # 暂停相机画面更新，保持显示标记后的画面
             self.pause_camera_updates = True
-            self.resume_camera_button.setEnabled(True) # 启用恢复相机按钮
+            self.switch_mode_button.setText(" 恢复相机")
+            try:
+                self.switch_mode_button.clicked.disconnect()
+            except TypeError:
+                pass  # 如果没有连接的信号，忽略错误
+            self.switch_mode_button.clicked.connect(self.resume_camera) # 启用恢复相机按钮
             
             # 按y坐标排序，区分上下文本
             text_with_positions.sort(key=lambda x: x[3])
@@ -862,8 +878,13 @@ class MainWindow(QMainWindow):
              logger.info("Stopping camera because new image was loaded.")
              self.stop_camera()
         
-        # 禁用恢复相机按钮
-        self.resume_camera_button.setEnabled(False)
+        # 切换到图片模式
+        self.switch_mode_button.setText(" 切换到相机")
+        try:
+            self.switch_mode_button.clicked.disconnect()
+        except TypeError:
+            pass  # 如果没有连接的信号，忽略错误
+        self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
 
     # --- Camera Methods ---
 
@@ -896,7 +917,12 @@ class MainWindow(QMainWindow):
         self.camera_thread.start()
         # Note: self.camera_running will be set by update_camera_status signal
         self.pause_camera_updates = False  # 重置暂停状态
-        self.resume_camera_button.setEnabled(False)  # 禁用恢复相机按钮
+        self.switch_mode_button.setText(" 切换到图片")
+        try:
+            self.switch_mode_button.clicked.disconnect()
+        except TypeError:
+            pass  # 如果没有连接的信号，忽略错误
+        self.switch_mode_button.clicked.connect(self.switch_to_image_mode)
 
     def stop_camera(self):
         """停止摄像头捕获线程"""
@@ -929,7 +955,12 @@ class MainWindow(QMainWindow):
         self.image_label.setText("请拖拽图片到此处或点击“上传图像”按钮")
         self.image_label.setStyleSheet("background-color: #f0f0f0; color: gray;")
         self.cv_image = None # Clear the cv_image
-        self.resume_camera_button.setEnabled(False) # 禁用恢复相机按钮
+        self.switch_mode_button.setText(" 切换到相机")
+        try:
+            self.switch_mode_button.clicked.disconnect()
+        except TypeError:
+            pass  # 如果没有连接的信号，忽略错误
+        self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
 
     def update_frame(self, frame: np.ndarray):
         """接收摄像头帧并更新UI"""
@@ -973,7 +1004,12 @@ class MainWindow(QMainWindow):
             logger.info("Camera successfully opened.")
             self.recognize_button.setEnabled(True) # ENABLE recognition during live feed
             self.upload_button.setEnabled(True) # Keep upload ENABLED during live feed
-            self.resume_camera_button.setEnabled(False)  # 禁用恢复相机按钮
+            self.switch_mode_button.setText(" 切换到图片")
+            try:
+                self.switch_mode_button.clicked.disconnect()
+            except TypeError:
+                pass  # 如果没有连接的信号，忽略错误
+            self.switch_mode_button.clicked.connect(self.switch_to_image_mode)
         else:
             logger.info("Camera is not running or failed to open.")
             # Enable recognize button ONLY if a static image is loaded
@@ -1010,7 +1046,52 @@ class MainWindow(QMainWindow):
             logger.error(f"Failed to save record: {e}")
             return False
 
+    def switch_to_camera_mode(self):
+        """切换到相机识别模式"""
+        # 先检查当前是否已经在相机模式
+        if self.camera_running:
+            return
+            
+        # 清除当前图像显示
+        self.image_label.clear()
+        self.image_label.setText("正在启动相机...")
+        self.image_label.setStyleSheet("background-color: #f0f0f0; color: gray;")
+        QApplication.processEvents()  # 更新UI
+        
+        # 重置图像相关变量
+        self.cv_image = None
+        self.current_image = None
+        
+        # 启动摄像头
+        self.start_camera()
+        
+        # 切换按钮文本
+        self.switch_mode_button.setText(" 切换到图片")
+        try:
+            self.switch_mode_button.clicked.disconnect()
+        except TypeError:
+            pass  # 如果没有连接的信号，忽略错误
+        self.switch_mode_button.clicked.connect(self.switch_to_image_mode)
+
+    def switch_to_image_mode(self):
+        """切换到图片识别模式"""
+        # 停止摄像头
+        self.stop_camera()
+        
+        # 切换按钮文本
+        self.switch_mode_button.setText(" 切换到相机")
+        try:
+            self.switch_mode_button.clicked.disconnect()
+        except TypeError:
+            pass  # 如果没有连接的信号，忽略错误
+        self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
+
     def resume_camera(self):
-        """恢复相机实时画面"""
+        """恢复相机"""
         self.pause_camera_updates = False
-        self.resume_camera_button.setEnabled(False)
+        self.switch_mode_button.setText(" 切换到图片")
+        try:
+            self.switch_mode_button.clicked.disconnect()
+        except TypeError:
+            pass  # 如果没有连接的信号，忽略错误
+        self.switch_mode_button.clicked.connect(self.switch_to_image_mode)

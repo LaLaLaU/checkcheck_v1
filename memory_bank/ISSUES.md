@@ -124,8 +124,6 @@ def resume_camera(self):
     self.pause_camera_updates = False
     self.resume_camera_button.setEnabled(False)
 
-**实施状态**: 已解决
-
 ### 4. 文本区分策略不合理
 
 **问题描述**: 
@@ -167,6 +165,76 @@ for text, _ in all_detected_texts:
 ```
 
 **实施状态**: 待解决
+
+### 5. 图片识别和相机识别模式切换功能
+
+**问题描述**: 
+当前应用程序无法在图片识别和相机识别模式之间切换。
+
+**原因分析**:
+缺少实现模式切换的代码。
+
+**解决方案**:
+1. 添加模式切换按钮
+2. 实现模式切换逻辑
+3. 在相机模式下添加暂停相机画面更新的功能
+
+具体实现：
+```python
+# 添加模式切换按钮
+self.mode_switch_button = QPushButton(" 切换模式")
+self.mode_switch_button.clicked.connect(self.switch_mode)
+button_layout.addWidget(self.mode_switch_button)
+
+# 实现模式切换逻辑
+def switch_mode(self):
+    if self.current_mode == "图片识别":
+        self.current_mode = "相机识别"
+        # 启动相机
+        self.start_camera()
+    else:
+        self.current_mode = "图片识别"
+        # 停止相机
+        self.stop_camera()
+
+# 在相机模式下添加暂停相机画面更新的功能
+def update_frame(self, frame: np.ndarray):
+    if not self.camera_running:
+        return
+        
+    # 如果暂停相机画面更新，则不更新画面
+    if self.pause_camera_updates:
+        return
+        
+    # 保存当前帧并更新显示
+    self.cv_image = frame.copy()
+    # ...
+```
+
+**实施状态**: 已解决
+
+### 6. 上传图像识别后切换为相机导致应用闪退
+
+**问题描述**: 
+上传图像识别后切换为相机模式导致应用闪退。
+
+**原因分析**:
+在 `switch_to_camera_mode` 方法中先停止相机再启动相机，但在上传图像识别后相机并未启动，导致 `stop_camera` 方法出错。
+
+**解决方案**:
+1. 修改 `switch_to_camera_mode` 方法，先检查相机是否已经启动
+2. 移除不必要的 `stop_camera` 调用
+3. 在启动相机前清除当前图像显示并重置相关变量
+
+## 待解决问题
+
+### 文本区分策略问题
+- **问题描述**: 当前基于Y坐标区分标牌文字和喷码文字的策略不可靠，特别是当标牌竖放时完全失效
+- **原因**: 简单地假设Y坐标较小的是标牌文字，Y坐标较大的是喷码文字
+- **解决方案**: 
+  - 修改应用程序，允许用户手动选择标牌文字和喷码文字
+  - 添加UI元素（如下拉列表）供用户选择
+  - 重构比对逻辑，使用用户选择的文本
 
 ## 优先级与修复计划
 
