@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
     QApplication, QFormLayout, QStyle
 )
 from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader
-from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, QThread
+from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, QThread, QTimer
 from src.core.processor import ImageProcessor
 from src.utils.database_manager import init_db, add_history_record, check_history_exists
 from src.ui.history_window import HistoryWindow
@@ -130,6 +130,7 @@ class MainWindow(QMainWindow):
         self.camera_running = False    # Flag for camera state
         self.camera_index = 1 # TODO: Make configurable
         self.ocr_processor = None # OCR 处理器
+        self.pause_camera_updates = False
 
         # 定义颜色常量
         self.pass_background_color = "#e0ffe0" # Light green for pass
@@ -534,146 +535,152 @@ class MainWindow(QMainWindow):
             return
 
         if self.camera_running and self.cv_image is not None:
-            logger.info("Recognizing current camera frame...")
-            # Disable button during processing to prevent multiple clicks
-            self.recognize_button.setEnabled(False)
-            self.recognize_button.setText("识别中...")
-            QApplication.processEvents() # Update UI
-            
-            try:
-                # Perform OCR on the current frame
-                results = self._perform_ocr(self.cv_image.copy()) # Use a copy to avoid race conditions
-                
-                if results is None:
-                     raise RuntimeError("OCR 处理返回失败 (None)")
-
-                # 提取文本和位置信息
-                text_with_positions = []
-                if results and results[0]:
-                    for line in results[0]:
-                        if len(line) >= 2 and isinstance(line[1], tuple) and len(line[1]) >= 2:
-                            box = line[0]  # 文本框坐标
-                            text = line[1][0]  # 文本内容
-                            confidence = line[1][1]  # 置信度
-                            
-                            # 计算文本框中心点y坐标，用于判断上下位置
-                            center_y = sum(point[1] for point in box) / len(box)
-                            
-                            text_with_positions.append((box, text, confidence, center_y))
-                
-                # 如果没有识别到文本
-                if not text_with_positions:
-                    self.label_text_result.setText("标牌文字: <未识别到文本>")
-                    self.print_text_result.setText("喷码文字: <未识别到文本>")
-                    self.comparison_result.setText("比对结果: <无法比对>")
-                    self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.fail_background_color))
-                    return
-                
-                # 在图像上绘制文本框
-                marked_image = self._draw_text_boxes(self.cv_image.copy(), text_with_positions)
-                
-                # 将标记后的图像转换为QPixmap并显示
-                h, w, ch = marked_image.shape
-                bytes_per_line = ch * w
-                qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-                pixmap = QPixmap.fromImage(qt_image)
-                pixmap = self._resize_pixmap(pixmap)
-                self.image_label.setPixmap(pixmap)
-                
-                # 按y坐标排序，区分上下文本
-                text_with_positions.sort(key=lambda x: x[3])
-                
-                # 假设上半部分是标牌文字，下半部分是喷码文字
-                # 计算中间分界线
-                height = self.cv_image.shape[0]
-                middle_y = height / 2
-                
-                label_texts = []
-                print_texts = []
-                
-                for item in text_with_positions:
-                    box, text, confidence, center_y = item
-                    if center_y < middle_y:
-                        label_texts.append(text)
-                    else:
-                        print_texts.append(text)
-                
-                # 如果某一部分没有识别到文本，可能是图像问题或识别问题
-                if not label_texts:
-                    label_text = "<未识别到标牌文字>"
-                else:
-                    label_text = " ".join(label_texts)
-                
-                if not print_texts:
-                    print_text = "<未识别到喷码文字>"
-                else:
-                    print_text = " ".join(print_texts)
-                
-                # 比对文本相似度
-                if label_text != "<未识别到标牌文字>" and print_text != "<未识别到喷码文字>":
-                    # 计算相似度 (可以使用更复杂的算法)
-                    import difflib
-                    similarity = difflib.SequenceMatcher(None, label_text, print_text).ratio()
-                    similarity_percent = int(similarity * 100)
-                    
-                    # 判断是否通过 (100%相似度才通过)
-                    if similarity_percent == 100:
-                        result_text = f"<span style='color:green; font-weight:bold;'>✓ 通过</span> (相似度: {similarity_percent}%)"
-                        background_color = self.pass_background_color
-                    else:
-                        result_text = f"<span style='color:red; font-weight:bold;'>✗ 不通过</span> (相似度: {similarity_percent}%)"
-                        background_color = self.fail_background_color
-                else:
-                    result_text = "<span style='color:orange; font-weight:bold;'>? 无法比对</span>"
-                    background_color = self.fail_background_color
-                
-                # 更新UI显示
-                self.label_text_result.setText(f"标牌文字: {label_text}")
-                self.print_text_result.setText(f"喷码文字: {print_text}")
-                self.comparison_result.setText(f"比对结果: {result_text}")
-                self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=background_color))
-                
-                logger.info("Camera frame recognition complete.")
-                
-                # 保存记录到数据库 (可选)
-                if label_text != "<未识别到标牌文字>" and print_text != "<未识别到喷码文字>":
-                    try:
-                        # 保存当前帧
-                        from datetime import datetime
-                        capture_dir = self._ensure_capture_dir()
-                        filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-                        save_path = os.path.join(capture_dir, filename)
-                        cv2.imwrite(save_path, self.cv_image)
-                        
-                        # 保存记录
-                        self.add_record(save_path, label_text, print_text, result_text)
-                        logger.info(f"Camera frame recognition record saved to: {save_path}")
-                    except Exception as e:
-                        logger.error(f"Failed to save camera record: {e}", exc_info=True)
-
-            except Exception as e:
-                 logger.error(f"Error during camera frame recognition: {e}", exc_info=True)
-                 QMessageBox.critical(self, "识别错误", f"处理摄像头帧时出错: {e}")
-                 self.label_text_result.setText("标牌文字: 错误")
-                 self.print_text_result.setText("喷码文字: 错误")
-                 self.comparison_result.setText("比对结果: 错误")
-                 self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.fail_background_color))
-            finally:
-                 # Re-enable button only if camera is still running 
-                 # (it might have been stopped by uploading another image)
-                 if self.camera_running:
-                     self.recognize_button.setEnabled(True)
-                     self.recognize_button.setText(" 开始识别")
-                  
+            # 重置暂停状态，确保获取最新的相机画面
+            self.pause_camera_updates = False
+            # 短暂延时，确保获取到最新的画面
+            QTimer.singleShot(100, self._perform_camera_recognition)
         elif self.current_image:
-            logger.info(f"Recognizing static image: {self.current_image}")
-            # Call the method that handles static images
+            # 处理静态图像
             self.on_start_recognition()
         else:
-            logger.warning("Recognize button clicked, but no image source available.")
-            QMessageBox.warning(self, "无法识别", "没有可识别的图像源。请确保摄像头运行或已上传图片。")
+            QMessageBox.warning(self, "无图像", "请先上传图像或启动摄像头。")
+    
+    def _perform_camera_recognition(self):
+        """执行相机画面识别，与_recognize_current_frame分离以允许短暂延时获取最新画面"""
+        logger.info("Recognizing current camera frame...")
+        # Disable button during processing to prevent multiple clicks
+        self.recognize_button.setEnabled(False)
+        self.recognize_button.setText("识别中...")
+        QApplication.processEvents() # Update UI
+        
+        try:
+            # Perform OCR on the current frame
+            results = self._perform_ocr(self.cv_image.copy()) # Use a copy to avoid race conditions
+            
+            if results is None:
+                 raise RuntimeError("OCR 处理返回失败 (None)")
+            
+            # 提取文本和位置信息
+            text_with_positions = []
+            if results and results[0]:
+                for line in results[0]:
+                    if len(line) >= 2 and isinstance(line[1], tuple) and len(line[1]) >= 2:
+                        box = line[0]  # 文本框坐标
+                        text = line[1][0]  # 文本内容
+                        confidence = line[1][1]  # 置信度
+                        
+                        # 计算文本框中心点y坐标，用于判断上下位置
+                        center_y = sum(point[1] for point in box) / len(box)
+                        
+                        text_with_positions.append((box, text, confidence, center_y))
+            
+            # 如果没有识别到文本
+            if not text_with_positions:
+                self.label_text_result.setText("标牌文字: <未识别到文本>")
+                self.print_text_result.setText("喷码文字: <未识别到文本>")
+                self.comparison_result.setText("比对结果: <无法比对>")
+                self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.fail_background_color))
+                return
+            
+            # 在图像上绘制文本框
+            marked_image = self._draw_text_boxes(self.cv_image.copy(), text_with_positions)
+            
+            # 将标记后的图像转换为QPixmap并显示
+            h, w, ch = marked_image.shape
+            bytes_per_line = ch * w
+            qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+            pixmap = QPixmap.fromImage(qt_image)
+            pixmap = self._resize_pixmap(pixmap)
+            self.image_label.setPixmap(pixmap)
+            
+            # 暂停相机画面更新，保持显示标记后的画面
+            self.pause_camera_updates = True
+            
+            # 按y坐标排序，区分上下文本
+            text_with_positions.sort(key=lambda x: x[3])
+            
+            # 假设上半部分是标牌文字，下半部分是喷码文字
+            # 计算中间分界线
+            height = self.cv_image.shape[0]
+            middle_y = height / 2
+            
+            label_texts = []
+            print_texts = []
+            
+            for item in text_with_positions:
+                box, text, confidence, center_y = item
+                if center_y < middle_y:
+                    label_texts.append(text)
+                else:
+                    print_texts.append(text)
+            
+            # 如果某一部分没有识别到文本，可能是图像问题或识别问题
+            if not label_texts:
+                label_text = "<未识别到标牌文字>"
+            else:
+                label_text = " ".join(label_texts)
+            
+            if not print_texts:
+                print_text = "<未识别到喷码文字>"
+            else:
+                print_text = " ".join(print_texts)
+            
+            # 比对文本相似度
+            if label_text != "<未识别到标牌文字>" and print_text != "<未识别到喷码文字>":
+                # 计算相似度 (可以使用更复杂的算法)
+                import difflib
+                similarity = difflib.SequenceMatcher(None, label_text, print_text).ratio()
+                similarity_percent = int(similarity * 100)
+                
+                # 判断是否通过 (100%相似度才通过)
+                if similarity_percent == 100:
+                    result_text = f"<span style='color:green; font-weight:bold;'>✓ 通过</span> (相似度: {similarity_percent}%)"
+                    background_color = self.pass_background_color
+                else:
+                    result_text = f"<span style='color:red; font-weight:bold;'>✗ 不通过</span> (相似度: {similarity_percent}%)"
+                    background_color = self.fail_background_color
+            else:
+                result_text = "<span style='color:orange; font-weight:bold;'>? 无法比对</span>"
+                background_color = self.fail_background_color
+            
+            # 更新UI显示
+            self.label_text_result.setText(f"标牌文字: {label_text}")
+            self.print_text_result.setText(f"喷码文字: {print_text}")
+            self.comparison_result.setText(f"比对结果: {result_text}")
+            self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=background_color))
+            
+            logger.info("Camera frame recognition complete.")
+            
+            # 保存记录到数据库 (可选)
+            if label_text != "<未识别到标牌文字>" and print_text != "<未识别到喷码文字>":
+                try:
+                    # 保存当前帧
+                    from datetime import datetime
+                    capture_dir = self._ensure_capture_dir()
+                    filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    save_path = os.path.join(capture_dir, filename)
+                    cv2.imwrite(save_path, self.cv_image)
+                    
+                    # 保存记录
+                    self.add_record(save_path, label_text, print_text, result_text)
+                    logger.info(f"Camera frame recognition record saved to: {save_path}")
+                except Exception as e:
+                    logger.error(f"Failed to save camera record: {e}", exc_info=True)
 
-
+        except Exception as e:
+             logger.error(f"Error during camera frame recognition: {e}", exc_info=True)
+             QMessageBox.critical(self, "识别错误", f"处理摄像头帧时出错: {e}")
+             self.label_text_result.setText("标牌文字: 错误")
+             self.print_text_result.setText("喷码文字: 错误")
+             self.comparison_result.setText("比对结果: 错误")
+             self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.fail_background_color))
+        finally:
+             # Re-enable button only if camera is still running 
+             # (it might have been stopped by uploading another image)
+             if self.camera_running:
+                 self.recognize_button.setEnabled(True)
+                 self.recognize_button.setText(" 开始识别")
+                  
     def _perform_ocr(self, image_data):
         """Performs OCR using the initialized processor.
 
@@ -745,8 +752,8 @@ class MainWindow(QMainWindow):
             min_x = min(point[0] for point in box)
             min_y = min(point[1] for point in box)
             
-            # 添加文本标签
-            label = f"{i+1}: {text} ({confidence:.2f})"
+            # 添加文本标签，移除序号前缀
+            label = f"{text} ({confidence:.2f})"
             cv2.putText(marked_image, label, (int(min_x), int(min_y) - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
@@ -870,6 +877,7 @@ class MainWindow(QMainWindow):
 
         self.camera_thread.start()
         # Note: self.camera_running will be set by update_camera_status signal
+        self.pause_camera_updates = False  # 重置暂停状态
 
     def stop_camera(self):
         """停止摄像头捕获线程"""
@@ -905,30 +913,31 @@ class MainWindow(QMainWindow):
 
     def update_frame(self, frame: np.ndarray):
         """接收摄像头帧并更新UI"""
-        # logger.debug("Received frame from camera.") # DEBUG log
-        try:
-            # Keep a reference to the OpenCV image
-            self.cv_image = frame 
-
-            # Convert frame for display - 直接使用BGR格式，让rgbSwapped()处理颜色转换
-            h, w, ch = frame.shape
-            bytes_per_line = ch * w
-            qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-            pixmap = QPixmap.fromImage(qt_image)
+        if not self.camera_running:
+            return
             
-            # Resize and display
-            resized_pixmap = self._resize_pixmap(pixmap)
-            self.image_label.setPixmap(resized_pixmap)
-            self.image_label.setAlignment(Qt.AlignCenter)
+        # 如果暂停相机画面更新，则不更新画面
+        if self.pause_camera_updates:
+            return
+            
+        # 保存当前帧
+        self.cv_image = frame.copy()
+        
+        # 将OpenCV格式的图像转换为Qt格式
+        h, w, ch = frame.shape
+        bytes_per_line = ch * w
+        qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+        
+        # 将QImage转换为QPixmap并调整大小
+        pixmap = QPixmap.fromImage(qt_image)
+        pixmap = self._resize_pixmap(pixmap)
+        
+        # 显示图像
+        self.image_label.setPixmap(pixmap)
+        self.image_label.setAlignment(Qt.AlignCenter)
 
-            # Ensure current_image (from file) is None when camera is active
-            self.current_image = None 
-
-        except Exception as e:
-            logger.error(f"Error updating frame: {e}")
-            # Optionally stop camera on error?
-            # self.stop_camera()
-            # self.handle_camera_error(f"处理帧时出错: {e}")
+        # Ensure current_image (from file) is None when camera is active
+        self.current_image = None 
 
     def handle_camera_error(self, error_message: str):
         """处理来自CameraWorker的错误信号"""

@@ -32,13 +32,15 @@
 ### 3. 识别内容显示可读性问题 
 
 **问题描述**:
-主页面识别内容缺乏视觉区分，需要在图像上直接标记识别到的文字区域。
+主页面识别内容缺乏视觉区分，需要在图像上直接标记识别到的文字区域。在相机模式下，识别后主界面仍显示实时相机画面，无法看到标记的文本框。
 
 **解决方案**:
 1. 添加了 `_draw_text_boxes` 方法，用于在图像上绘制文本框和标签
 2. 在相机模式和静态图片模式下的识别过程中，都添加了绘制文本框的代码
 3. 使用不同颜色区分不同类型的文本（绿色表示标牌文字，红色表示喷码文字）
-4. 在每个文本框旁边显示文本内容和置信度
+4. 移除了文本标签中的序号前缀，只显示文本内容和置信度
+5. 添加了暂停相机画面更新的功能，确保在识别完成后显示带有文本框标记的抓取画面
+6. 重构了相机识别过程，使用QTimer延时确保获取最新画面
 
 具体实现：
 ```python
@@ -68,13 +70,41 @@ def _draw_text_boxes(self, image, text_boxes):
         cv2.polylines(marked_image, [points], True, color, 2)
         
         # 添加文本标签
-        label = f"{i+1}: {text} ({confidence:.2f})"
+        label = f"{text} ({confidence:.2f})"
         min_x = min(point[0] for point in box)
         min_y = min(point[1] for point in box)
         cv2.putText(marked_image, label, (int(min_x), int(min_y) - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     
     return marked_image
+
+# 添加暂停标志
+self.pause_camera_updates = False
+
+# 修改update_frame方法，在暂停状态下不更新画面
+def update_frame(self, frame: np.ndarray):
+    if not self.camera_running:
+        return
+        
+    # 如果暂停相机画面更新，则不更新画面
+    if self.pause_camera_updates:
+        return
+        
+    # 保存当前帧并更新显示
+    self.cv_image = frame.copy()
+    # ...
+
+# 在识别完成后暂停相机画面更新
+self.pause_camera_updates = True
+
+# 在_recognize_current_frame方法中重置暂停状态
+def _recognize_current_frame(self):
+    # ...
+    if self.camera_running and self.cv_image is not None:
+        # 重置暂停状态，确保获取最新的相机画面
+        self.pause_camera_updates = False
+        # 短暂延时，确保获取到最新的画面
+        QTimer.singleShot(100, self._perform_camera_recognition)
 ```
 
 **实施状态**: 已解决
