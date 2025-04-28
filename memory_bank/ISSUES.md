@@ -41,6 +41,7 @@
 4. 移除了文本标签中的序号前缀，只显示文本内容和置信度
 5. 添加了暂停相机画面更新的功能，确保在识别完成后显示带有文本框标记的抓取画面
 6. 重构了相机识别过程，使用QTimer延时确保获取最新画面
+7. 添加了"恢复相机"按钮，允许用户在查看识别结果后恢复实时相机画面，方便调整画面内容
 
 具体实现：
 ```python
@@ -105,7 +106,23 @@ def _recognize_current_frame(self):
         self.pause_camera_updates = False
         # 短暂延时，确保获取到最新的画面
         QTimer.singleShot(100, self._perform_camera_recognition)
-```
+
+# 添加恢复相机按钮
+self.resume_camera_button = QPushButton(" 恢复相机")
+self.resume_camera_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+self.resume_camera_button.setEnabled(False)  # 初始状态下禁用
+self.resume_camera_button.clicked.connect(self.resume_camera)
+button_layout.addWidget(self.resume_camera_button)
+
+# 在识别完成后暂停相机画面更新并启用恢复按钮
+self.pause_camera_updates = True
+self.resume_camera_button.setEnabled(True)
+
+# 恢复相机实时画面的方法
+def resume_camera(self):
+    """恢复相机实时画面"""
+    self.pause_camera_updates = False
+    self.resume_camera_button.setEnabled(False)
 
 **实施状态**: 已解决
 

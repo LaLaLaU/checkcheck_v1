@@ -274,6 +274,12 @@ class MainWindow(QMainWindow):
         self.recognize_button.setEnabled(False) # Initially disabled
         button_layout.addWidget(self.recognize_button)
 
+        self.resume_camera_button = QPushButton(" 恢复相机")
+        self.resume_camera_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.resume_camera_button.setEnabled(False)  # 初始状态下禁用
+        self.resume_camera_button.clicked.connect(self.resume_camera)
+        button_layout.addWidget(self.resume_camera_button)
+
         self.history_button = QPushButton(history_icon, " 历史记录") # Match screenshot text
         self.history_button.setToolTip("查看历史识别记录")
         self.history_button.clicked.connect(self._show_history_window)
@@ -389,6 +395,9 @@ class MainWindow(QMainWindow):
         if self.camera_running:
              logger.info("Stopping camera because new image was loaded.")
              self.stop_camera()
+        
+        # 禁用恢复相机按钮
+        self.resume_camera_button.setEnabled(False)
 
     def _resize_pixmap(self, pixmap):
         """
@@ -595,6 +604,7 @@ class MainWindow(QMainWindow):
             
             # 暂停相机画面更新，保持显示标记后的画面
             self.pause_camera_updates = True
+            self.resume_camera_button.setEnabled(True) # 启用恢复相机按钮
             
             # 按y坐标排序，区分上下文本
             text_with_positions.sort(key=lambda x: x[3])
@@ -846,6 +856,9 @@ class MainWindow(QMainWindow):
         if self.camera_running:
              logger.info("Stopping camera because new image was loaded.")
              self.stop_camera()
+        
+        # 禁用恢复相机按钮
+        self.resume_camera_button.setEnabled(False)
 
     # --- Camera Methods ---
 
@@ -878,6 +891,7 @@ class MainWindow(QMainWindow):
         self.camera_thread.start()
         # Note: self.camera_running will be set by update_camera_status signal
         self.pause_camera_updates = False  # 重置暂停状态
+        self.resume_camera_button.setEnabled(False)  # 禁用恢复相机按钮
 
     def stop_camera(self):
         """停止摄像头捕获线程"""
@@ -910,6 +924,7 @@ class MainWindow(QMainWindow):
         self.image_label.setText("请拖拽图片到此处或点击“上传图像”按钮")
         self.image_label.setStyleSheet("background-color: #f0f0f0; color: gray;")
         self.cv_image = None # Clear the cv_image
+        self.resume_camera_button.setEnabled(False) # 禁用恢复相机按钮
 
     def update_frame(self, frame: np.ndarray):
         """接收摄像头帧并更新UI"""
@@ -953,6 +968,7 @@ class MainWindow(QMainWindow):
             logger.info("Camera successfully opened.")
             self.recognize_button.setEnabled(True) # ENABLE recognition during live feed
             self.upload_button.setEnabled(True) # Keep upload ENABLED during live feed
+            self.resume_camera_button.setEnabled(False)  # 禁用恢复相机按钮
         else:
             logger.info("Camera is not running or failed to open.")
             # Enable recognize button ONLY if a static image is loaded
@@ -987,3 +1003,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Failed to save record: {e}")
             return False
+
+    def resume_camera(self):
+        """恢复相机实时画面"""
+        self.pause_camera_updates = False
+        self.resume_camera_button.setEnabled(False)
