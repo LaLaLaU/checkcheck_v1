@@ -781,7 +781,7 @@ class MainWindow(QMainWindow):
                   self.recognize_button.setEnabled(False) # Keep disabled if static img not loaded
                   self.recognize_button.setText(" 开始识别")
              # Resume button state is handled when pausing/resuming
-
+                  
     def _perform_ocr(self, image_data):
         """Performs OCR using the initialized processor.
 
@@ -1061,7 +1061,7 @@ class MainWindow(QMainWindow):
         
         self.camera_worker.finished.connect(self.camera_thread.quit) 
         self.camera_worker.finished.connect(self.camera_worker.deleteLater) 
-        self.camera_thread.finished.connect(self.camera_thread.deleteLater) 
+        self.camera_thread.finished.connect(self.camera_thread.deleteLater)
 
         # Start the thread
         self.camera_thread.start()
@@ -1244,7 +1244,7 @@ class MainWindow(QMainWindow):
         
         # Ensure mode switch button is correct for camera mode
         if self.camera_running:
-             self.switch_mode_button.setText(" 切换到图片")
+             self.switch_mode_button.setText(" 切换到图片") # Corrected text
              # Assuming default icon is camera, set to image icon
              try: 
                  icon_path = os.path.join("resources", "icons", "image_mode.png")
@@ -1258,7 +1258,7 @@ class MainWindow(QMainWindow):
              
              try: self.switch_mode_button.clicked.disconnect()
              except TypeError: pass
-             self.switch_mode_button.clicked.connect(self.switch_to_image_mode)
+        self.switch_mode_button.clicked.connect(self.switch_to_image_mode)
 
     def clear_recognition_results(self):
         """清空识别结果框"""

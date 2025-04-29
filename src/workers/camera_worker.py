@@ -28,34 +28,6 @@ class CameraWorker(QObject):
             for api in apis_to_try:
                 self.cap = cv2.VideoCapture(self.camera_index, api)
                 if self.cap.isOpened():
-                    # --- Add this block --- (Attempt to set resolution)
-                    common_resolutions = [(1280, 720), (640, 480), (1920, 1080)]
-                    set_res_success = False
-                    for w, h in common_resolutions:
-                        logger.info(f"Attempting to set resolution to {w}x{h} for camera {self.camera_index}...")
-                        # Setting might take a moment or fail silently
-                        res_w = self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
-                        res_h = self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-                        # Verify by getting the actual resolution
-                        # Add a small delay maybe needed for settings to apply on some cams
-                        QThread.msleep(100) 
-                        actual_w = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-                        actual_h = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-                        logger.info(f"Set resolution attempt for {w}x{h}. Success flags: W={res_w}, H={res_h}. Actual read resolution: {actual_w}x{actual_h}")
-                        # Check if resolution was set reasonably close to target
-                        if abs(actual_w - w) < 10 and abs(actual_h - h) < 10: 
-                            logger.info(f"Successfully set resolution close to {w}x{h}")
-                            set_res_success = True
-                            break # Stop trying after success
-                        else:
-                             logger.warning(f"Failed to set resolution {w}x{h} accurately. Camera reported {actual_w}x{actual_h}.")
-
-                    if not set_res_success:
-                        current_w = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-                        current_h = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-                        logger.warning(f"Could not set any standard resolution for camera {self.camera_index}. Using default reported: {current_w}x{current_h}")
-                    # --- End of added block ---
-
                     logger.info(f"Successfully opened camera {self.camera_index} using API: {api}")
                     self.camera_opened.emit(True)
                     break # Break from the API loop
@@ -92,7 +64,7 @@ class CameraWorker(QObject):
                     self.frame_ready.emit(frame)
 
                     # Add a small delay to prevent high CPU usage and allow event processing
-                    QThread.msleep(30) # Adjust delay as needed (e.g., 30ms ~ 33fps)
+                    QThread.msleep(30) # Revert sleep time back to 30ms
 
         except Exception as e:
              logger.error(f"Exception in CameraWorker run loop: {e}", exc_info=True)
