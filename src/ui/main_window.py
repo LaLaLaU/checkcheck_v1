@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QFileDialog, QMessageBox,
     QSplitter, QFrame, QGroupBox, QProgressDialog,
-    QApplication, QFormLayout, QStyle
+    QApplication, QFormLayout, QStyle, QComboBox
 )
 from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader
 from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, QThread, QTimer
@@ -22,6 +22,7 @@ from src.core.processor import ImageProcessor
 from src.utils.database_manager import init_db, add_history_record, check_history_exists
 from src.ui.history_window import HistoryWindow
 from src.workers.camera_worker import CameraWorker
+from src.utils.camera_utils import detect_available_cameras
 import logging
 
 # Attempt to import the OCR processor
@@ -43,7 +44,7 @@ class ImageDropLabel(QLabel):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setAlignment(Qt.AlignCenter)
-        self.setText("请拖拽图片到此处或点击“上传图像”按钮")
+        self.setText("请拖拽图片到此处或点击\"上传图像\"按钮")
         self.setFrameShape(QFrame.Box)
         self.setMinimumHeight(400)
         self.setStyleSheet("background-color: #f0f0f0; color: gray;")
@@ -131,6 +132,9 @@ class MainWindow(QMainWindow):
         self.camera_index = 1 # TODO: Make configurable
         self.ocr_processor = None # OCR 处理器
         self.pause_camera_updates = False
+        self.available_cameras = [] # List to store available camera indices
+        self.selected_camera_index = 0 # Default/selected camera index
+        self.current_mode = "相机识别" # Default mode
 
         # 定义颜色常量
         self.pass_background_color = "#e0ffe0" # Light green for pass
@@ -192,11 +196,64 @@ class MainWindow(QMainWindow):
 
     def _init_camera(self):
         """
-        初始化相机相关设置（如果需要）
+        Initialize camera settings and detect available cameras.
         """
-        # 目前没有需要预加载的相机设置
-        logger.info("Camera system initialized (worker/thread not started yet).")
-        pass 
+        logger.info("Initializing camera system and detecting available cameras...")
+        self.available_cameras = detect_available_cameras()
+        self.camera_selection_combo.clear() # Clear previous items
+
+        if not self.available_cameras:
+            logger.warning("No cameras detected.")
+            self.camera_selection_combo.addItem("未检测到相机")
+            self.camera_selection_combo.setEnabled(False)
+            # Disable camera-related buttons if no camera is found
+            # Use the correct button names based on _setup_ui
+            self.recognize_button.setEnabled(False) 
+            self.switch_mode_button.setEnabled(False)
+            # self.resume_camera_button.setEnabled(False) # Resume button might not exist in this version yet
+            self.statusBar().showMessage('未检测到可用摄像头')
+        elif len(self.available_cameras) == 1:
+            logger.info(f"Detected single camera with index: {self.available_cameras[0]}")
+            self.camera_selection_combo.addItem(f"相机 {self.available_cameras[0]}")
+            self.camera_selection_combo.setEnabled(False) # Disable selection if only one
+            self.selected_camera_index = self.available_cameras[0] # Auto-select the only camera
+            self.statusBar().showMessage(f'使用相机 {self.selected_camera_index}')
+            # Ensure camera buttons are enabled
+            self.recognize_button.setEnabled(True) 
+            self.switch_mode_button.setEnabled(True)
+        else:
+            logger.info(f"Detected multiple cameras: {self.available_cameras}")
+            for index in self.available_cameras:
+                self.camera_selection_combo.addItem(f"相机 {index}", userData=index) # Store index in userData
+            self.camera_selection_combo.setEnabled(True)
+            # Set initial selection to the first detected camera
+            self.camera_selection_combo.setCurrentIndex(0) 
+            self.selected_camera_index = self.camera_selection_combo.currentData() # Get index from userData
+            self.statusBar().showMessage(f'检测到多个相机，已选择相机 {self.selected_camera_index}')
+             # Ensure camera buttons are enabled
+            self.recognize_button.setEnabled(True) 
+            self.switch_mode_button.setEnabled(True)
+            # Connect signal for selection change
+            self.camera_selection_combo.currentIndexChanged.connect(self.on_camera_selection_changed)
+        
+        logger.info("Camera system initialized.")
+
+    def on_camera_selection_changed(self, index):
+        """Handle camera selection change from the dropdown."""
+        if index < 0 or not self.available_cameras or len(self.available_cameras) <= 1: 
+            return 
+        
+        new_index = self.camera_selection_combo.itemData(index)
+        if new_index is not None and new_index != self.selected_camera_index:
+            logger.info(f"User selected camera index: {new_index}")
+            self.selected_camera_index = new_index
+            self.statusBar().showMessage(f'已选择相机 {self.selected_camera_index}')
+            # If camera is currently running, stop and restart with the new index
+            if self.camera_running:
+                logger.info("Restarting camera with newly selected index...")
+                self.stop_camera()
+                # Short delay might be needed before restarting
+                QTimer.singleShot(200, self.start_camera) 
 
     def _setup_ui(self):
         """
@@ -262,6 +319,7 @@ class MainWindow(QMainWindow):
         recognize_icon = self.style().standardIcon(QStyle.SP_MediaPlay) 
         history_icon = self.style().standardIcon(QStyle.SP_FileDialogListView) # Matching screenshot's likely icon
         settings_icon = self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
+        resume_icon = self.style().standardIcon(QStyle.SP_MediaPlay) # Icon for resume button
 
         self.upload_button = QPushButton(upload_icon, " 上传图像")
         self.upload_button.setToolTip("从本地文件上传图像")
@@ -269,12 +327,19 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(self.upload_button)
 
         self.recognize_button = QPushButton(recognize_icon, " 开始识别") 
-        self.recognize_button.setToolTip("对当前显示的图像进行识别")
-        self.recognize_button.clicked.connect(self._recognize_current_frame) # New connection for live/static
+        self.recognize_button.setToolTip("对当前显示的图像或摄像头画面进行识别")
+        self.recognize_button.clicked.connect(self._recognize_current_frame)
         self.recognize_button.setEnabled(False) # Initially disabled
         button_layout.addWidget(self.recognize_button)
 
-        # 添加切换按钮，用于在图片识别和相机识别模式之间切换
+        # --- Resume Camera Button (Re-added) ---
+        self.resume_camera_button = QPushButton(resume_icon, " 恢复相机")
+        self.resume_camera_button.setEnabled(False) # Start disabled
+        self.resume_camera_button.setToolTip("恢复实时相机画面显示")
+        self.resume_camera_button.clicked.connect(self.resume_camera) # Connect to method
+        button_layout.addWidget(self.resume_camera_button)
+        # --- End Resume Camera Button ---
+
         self.switch_mode_button = QPushButton(" 切换到相机")
         self.switch_mode_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.switch_mode_button.setToolTip("切换到相机识别模式")
@@ -290,6 +355,15 @@ class MainWindow(QMainWindow):
         self.settings_button.setToolTip("应用程序设置")
         self.settings_button.clicked.connect(self.on_open_settings)
         button_layout.addWidget(self.settings_button)
+        
+        # 添加相机选择下拉框
+        self.camera_selection_combo = QComboBox()
+        self.camera_selection_combo.setToolTip("选择要使用的摄像头")
+        self.camera_selection_combo.setMinimumWidth(100)
+        # Connect signal later in _init_camera if multiple cameras detected
+        button_layout.addWidget(QLabel("相机选择:"))
+        button_layout.addWidget(self.camera_selection_combo)
+        button_layout.addSpacing(20) # Add space after combo box
         
         # 将按钮布局添加到下方布局
         bottom_layout.addLayout(button_layout)
@@ -614,12 +688,11 @@ class MainWindow(QMainWindow):
             
             # 暂停相机画面更新，保持显示标记后的画面
             self.pause_camera_updates = True
-            self.switch_mode_button.setText(" 恢复相机")
-            try:
-                self.switch_mode_button.clicked.disconnect()
-            except TypeError:
-                pass  # 如果没有连接的信号，忽略错误
-            self.switch_mode_button.clicked.connect(self.resume_camera) # 启用恢复相机按钮
+            self.resume_camera_button.setEnabled(True) # Enable the resume button
+            # Disable recognize button while paused
+            self.recognize_button.setEnabled(False)
+            # Optional: Change mode switch button text/action while paused?
+            # For simplicity, let's keep mode switch as is, resume is separate.
             
             # 按y坐标排序，区分上下文本
             text_with_positions.sort(key=lambda x: x[3])
@@ -700,12 +773,15 @@ class MainWindow(QMainWindow):
              self.comparison_result.setText("比对结果: 错误")
              self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.fail_background_color))
         finally:
-             # Re-enable button only if camera is still running 
-             # (it might have been stopped by uploading another image)
-             if self.camera_running:
+             # Re-enable button only if camera is still running AND not paused
+             if self.camera_running and not self.pause_camera_updates:
                  self.recognize_button.setEnabled(True)
                  self.recognize_button.setText(" 开始识别")
-                  
+             elif not self.camera_running: # If camera stopped during processing
+                  self.recognize_button.setEnabled(False) # Keep disabled if static img not loaded
+                  self.recognize_button.setText(" 开始识别")
+             # Resume button state is handled when pausing/resuming
+
     def _perform_ocr(self, image_data):
         """Performs OCR using the initialized processor.
 
@@ -928,35 +1004,69 @@ class MainWindow(QMainWindow):
             logger.warning("Camera already running.")
             return
         
-        # 如果有加载的静态图像，清除它
+        # Check if cameras were detected during init
+        if not self.available_cameras:
+             logger.error("Cannot start camera: No cameras available.")
+             QMessageBox.warning(self, "相机错误", "未检测到可用摄像头，无法启动。")
+             return
+
+        # Ensure selected index is valid 
+        if self.selected_camera_index not in self.available_cameras:
+             logger.error(f"Cannot start camera: Selected index {self.selected_camera_index} is not available in {self.available_cameras}.")
+             # Reset selection to the first available one if possible
+             if self.available_cameras:
+                 self.selected_camera_index = self.available_cameras[0]
+                 # Find the corresponding text in the combo box to update UI
+                 for i in range(self.camera_selection_combo.count()):
+                     if self.camera_selection_combo.itemData(i) == self.selected_camera_index:
+                         self.camera_selection_combo.setCurrentIndex(i)
+                         break
+                 logger.warning(f"Resetting selected camera index to {self.selected_camera_index}")
+                 self.statusBar().showMessage(f'重置为相机 {self.selected_camera_index}')
+             else: # Should have been caught by the first check
+                 return 
+
+        logger.info(f"Starting camera with index: {self.selected_camera_index}")
+        self.statusBar().showMessage(f'正在启动相机 {self.selected_camera_index}...')
+        QApplication.processEvents() # Update UI immediately
+
+        # Disable camera selection while camera is starting/running
+        # if len(self.available_cameras) > 1:
+        #     self.camera_selection_combo.setEnabled(False) 
+        
+        # Clear any existing image display
         if self.current_image:
             self.current_image = None
-            self.image_label.setText("启动摄像头...") # Placeholder text
-            self.recognize_button.setEnabled(False) # Disable recognition for live feed
-
-        logger.info(f"Starting camera thread for index {self.camera_index}...")
-        self.camera_thread = QThread()
-        self.camera_worker = CameraWorker(self.camera_index)
+            self.cv_image = None
+            self.image_label.clear()
+            self.image_label.setText("启动摄像头...") 
+        
+        self.camera_thread = QThread(self) # Parent to main window
+        # Pass the selected camera index to the worker
+        self.camera_worker = CameraWorker(camera_index=self.selected_camera_index) 
         self.camera_worker.moveToThread(self.camera_thread)
 
         # Connect signals
+        self.camera_thread.started.connect(self.camera_worker.run)
         self.camera_worker.frame_ready.connect(self.update_frame)
         self.camera_worker.error_occurred.connect(self.handle_camera_error)
         self.camera_worker.camera_opened.connect(self.update_camera_status)
-        self.camera_thread.started.connect(self.camera_worker.run)
-        # Ensure worker cleans up properly when thread finishes
-        self.camera_thread.finished.connect(self.camera_worker.deleteLater)
-        self.camera_thread.finished.connect(self.camera_thread.deleteLater)
+        
+        # Ensure cleanup using finished signals
+        # Disconnect previous connections first to be safe if restarting
+        try: self.camera_worker.finished.disconnect() 
+        except TypeError: pass
+        try: self.camera_thread.finished.disconnect() 
+        except TypeError: pass
+        
+        self.camera_worker.finished.connect(self.camera_thread.quit) 
+        self.camera_worker.finished.connect(self.camera_worker.deleteLater) 
+        self.camera_thread.finished.connect(self.camera_thread.deleteLater) 
 
+        # Start the thread
         self.camera_thread.start()
-        # Note: self.camera_running will be set by update_camera_status signal
-        self.pause_camera_updates = False  # 重置暂停状态
-        self.switch_mode_button.setText(" 切换到图片")
-        try:
-            self.switch_mode_button.clicked.disconnect()
-        except TypeError:
-            pass  # 如果没有连接的信号，忽略错误
-        self.switch_mode_button.clicked.connect(self.switch_to_image_mode)
+        logger.info("Camera thread started.")
+        # self.camera_running state will be set by update_camera_status signal
 
     def stop_camera(self):
         """停止摄像头捕获线程"""
@@ -983,72 +1093,89 @@ class MainWindow(QMainWindow):
 
         # Explicitly set running state false *after* confirming thread stop (or timeout)
         self.camera_running = False
-        logger.info("Camera thread stopped and resources released.")
+        logger.info("Camera thread stopped and resources potentially released.") # Adjusted message
 
-        # Reset image label to initial state if needed
-        self.image_label.setText("请拖拽图片到此处或点击“上传图像”按钮")
+        # Reset image label 
+        self.image_label.clear() # Clear pixmap first
+        self.image_label.setText("请拖拽图片到此处或点击\"上传图像\"按钮") # Corrected text
         self.image_label.setStyleSheet("background-color: #f0f0f0; color: gray;")
-        self.cv_image = None # Clear the cv_image
+        self.cv_image = None 
+
+        # Re-enable camera selection if multiple cameras are available
+        if self.available_cameras and len(self.available_cameras) > 1:
+             self.camera_selection_combo.setEnabled(True) 
+
+        # Update mode switch button
         self.switch_mode_button.setText(" 切换到相机")
+        self.switch_mode_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         try:
             self.switch_mode_button.clicked.disconnect()
-        except TypeError:
-            pass  # 如果没有连接的信号，忽略错误
+        except TypeError: pass 
         self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
+        
+        logger.info("stop_camera finished.")
 
     def update_frame(self, frame: np.ndarray):
         """接收摄像头帧并更新UI"""
-        if not self.camera_running:
+        if not self.camera_running or self.pause_camera_updates:
             return
             
-        # 如果暂停相机画面更新，则不更新画面
-        if self.pause_camera_updates:
-            return
-            
-        # 保存当前帧
-        self.cv_image = frame.copy()
-        
-        # 将OpenCV格式的图像转换为Qt格式
+        self.cv_image = frame.copy() # Save frame
         h, w, ch = frame.shape
         bytes_per_line = ch * w
         qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-        
-        # 将QImage转换为QPixmap并调整大小
         pixmap = QPixmap.fromImage(qt_image)
         pixmap = self._resize_pixmap(pixmap)
-        
-        # 显示图像
-        self.image_label.setPixmap(pixmap)
-        self.image_label.setAlignment(Qt.AlignCenter)
-
-        # Ensure current_image (from file) is None when camera is active
-        self.current_image = None 
+        self.image_label.setPixmap(pixmap) # Display frame
+        self.current_image = None # Ensure static image is cleared
 
     def handle_camera_error(self, error_message: str):
         """处理来自CameraWorker的错误信号"""
         logger.error(f"Camera Error: {error_message}")
         QMessageBox.critical(self, "摄像头错误", error_message)
-        # Ensure UI reflects stopped state even if stop_camera wasn't fully completed due to error
         self.camera_running = False # Force state update
+        # Re-enable camera selection if applicable
+        if self.available_cameras and len(self.available_cameras) > 1:
+             self.camera_selection_combo.setEnabled(True) 
+        # Update UI, maybe switch back to image mode?
+        # self.switch_to_image_mode() # Let's not force switch mode on error, just enable selection
+        # Update button states if needed
+        self.recognize_button.setEnabled(False) # Can't recognize if camera failed
+        self.switch_mode_button.setText(" 切换到相机")
+        self.switch_mode_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        try: self.switch_mode_button.clicked.disconnect()
+        except TypeError: pass
+        self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
+
 
     def update_camera_status(self, opened: bool):
         """更新摄像头状态标签和按钮"""
         self.camera_running = opened
+        # Always ensure combo box is enabled if multiple cameras exist
+        if self.available_cameras and len(self.available_cameras) > 1:
+            self.camera_selection_combo.setEnabled(True) 
+
         if opened:
-            logger.info("Camera successfully opened.")
-            self.recognize_button.setEnabled(True) # ENABLE recognition during live feed
-            self.upload_button.setEnabled(True) # Keep upload ENABLED during live feed
+            logger.info(f"Camera {self.selected_camera_index} successfully opened.")
+            self.statusBar().showMessage(f'相机 {self.selected_camera_index} 已连接')
+            self.recognize_button.setEnabled(True) # Enable recognition button
             self.switch_mode_button.setText(" 切换到图片")
+            self.switch_mode_button.setIcon(QIcon(os.path.join("resources", "icons", "image_mode.png"))) # Update icon maybe?
             try:
                 self.switch_mode_button.clicked.disconnect()
-            except TypeError:
-                pass  # 如果没有连接的信号，忽略错误
+            except TypeError: pass
             self.switch_mode_button.clicked.connect(self.switch_to_image_mode)
         else:
-            logger.info("Camera is not running or failed to open.")
-            # Enable recognize button ONLY if a static image is loaded
-            self.recognize_button.setEnabled(self.current_image is not None)
-            self.upload_button.setEnabled(True) # Re-enable upload
+            logger.error(f"Failed to open camera {self.selected_camera_index}.")
+            self.statusBar().showMessage(f'相机 {self.selected_camera_index} 打开失败')
+            # Message box is now handled in handle_camera_error which is usually triggered before this
+            # Ensure UI reflects image mode state as camera failed
+            self.recognize_button.setEnabled(False) # Can't recognize if camera failed
+            self.switch_mode_button.setText(" 切换到相机")
+            self.switch_mode_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            try: self.switch_mode_button.clicked.disconnect()
+            except TypeError: pass
+            self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
 
     def _ensure_capture_dir(self):
         """确保捕获图像的保存目录存在"""
@@ -1082,61 +1209,56 @@ class MainWindow(QMainWindow):
 
     def switch_to_camera_mode(self):
         """切换到相机识别模式"""
-        # 先检查当前是否已经在相机模式
-        if self.camera_running:
-            return
-            
-        # 清空识别结果
+        if self.camera_running: return # Already in camera mode
         self.clear_recognition_results()
-        
-        # 清除当前图像显示
+        # Clear image display and variables
         self.image_label.clear()
         self.image_label.setText("正在启动相机...")
-        self.image_label.setStyleSheet("background-color: #f0f0f0; color: gray;")
-        QApplication.processEvents()  # 更新UI
-        
-        # 重置图像相关变量
-        self.cv_image = None
         self.current_image = None
-        
-        # 启动摄像头
-        self.start_camera()
-        
-        # 切换按钮文本
-        self.switch_mode_button.setText(" 切换到图片")
-        try:
-            self.switch_mode_button.clicked.disconnect()
-        except TypeError:
-            pass  # 如果没有连接的信号，忽略错误
-        self.switch_mode_button.clicked.connect(self.switch_to_image_mode)
+        self.cv_image = None
+        self.image_path = None 
+        QApplication.processEvents() 
+        self.start_camera() # This will update buttons via update_camera_status
 
     def switch_to_image_mode(self):
         """切换到图片识别模式"""
-        # 清空识别结果
+        if not self.camera_running: return # Already in image mode or camera failed
+        self.pause_camera_updates = False # Ensure pause is reset
+        self.resume_camera_button.setEnabled(False) # Disable resume button
         self.clear_recognition_results()
-        
-        # 停止摄像头
-        self.stop_camera()
-        
-        # 切换按钮文本
-        self.switch_mode_button.setText(" 切换到相机")
-        try:
-            self.switch_mode_button.clicked.disconnect()
-        except TypeError:
-            pass  # 如果没有连接的信号，忽略错误
-        self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
+        self.stop_camera() # This updates buttons and resets label
 
     def resume_camera(self):
-        """恢复相机"""
+        """恢复相机实时画面"""
+        logger.info("Resuming camera updates.")
         self.pause_camera_updates = False
-        self.clear_recognition_results()
+        self.resume_camera_button.setEnabled(False) # Disable itself
+        # Re-enable recognition button if camera is running
+        if self.camera_running:
+            self.recognize_button.setEnabled(True)
+            self.recognize_button.setText(" 开始识别")
+            
+        # Optionally clear results/marked image display?
+        # self.clear_recognition_results() # Maybe confusing?
+        # update_frame will now take over displaying live feed
         
-        self.switch_mode_button.setText(" 切换到图片")
-        try:
-            self.switch_mode_button.clicked.disconnect()
-        except TypeError:
-            pass  # 如果没有连接的信号，忽略错误
-        self.switch_mode_button.clicked.connect(self.switch_to_image_mode)
+        # Ensure mode switch button is correct for camera mode
+        if self.camera_running:
+             self.switch_mode_button.setText(" 切换到图片")
+             # Assuming default icon is camera, set to image icon
+             try: 
+                 icon_path = os.path.join("resources", "icons", "image_mode.png")
+                 if os.path.exists(icon_path):
+                     self.switch_mode_button.setIcon(QIcon(icon_path))
+                 else: # Fallback if icon missing
+                     self.switch_mode_button.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
+             except Exception as e:
+                 logger.warning(f"Could not set image mode icon: {e}")
+                 self.switch_mode_button.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
+             
+             try: self.switch_mode_button.clicked.disconnect()
+             except TypeError: pass
+             self.switch_mode_button.clicked.connect(self.switch_to_image_mode)
 
     def clear_recognition_results(self):
         """清空识别结果框"""
