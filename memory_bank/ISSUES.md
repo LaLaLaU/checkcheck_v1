@@ -1,11 +1,73 @@
 # CheckCheck 项目当前问题记录
 
-**日期**: 2025-04-28
-**版本**: 1.2
+**日期**: 2025-04-29
+**版本**: 1.3
+
+## 待解决问题
+
+### 1. 文本区分策略不合理 (优先级: 高)
+
+**问题描述**: 
+当前代码简单地根据文本框Y坐标位置区分上下文本（标牌/喷码），这种方法不够灵活，无法适应不同图像布局，特别是标牌竖放时完全无法区分。
+
+**原因分析**:
+在 `_recognize_current_frame` 或 `_perform_camera_recognition` 方法中，使用了固定的Y坐标位置划分策略。
+
+**建议解决方案**:
+1. 不预先区分标牌/喷码文字，而是将所有识别到的文本列出。
+2. 在UI中添加交互方式（如下拉列表、文本框、或直接在图像上点击选择），让用户手动指定哪个文本是标牌，哪个是喷码。
+3. **(可选)** 探索基于文本内容特征（如关键字、格式）或相对位置关系（如哪个框在哪个框的上方/左侧）的自动区分方法。
+
+**实施状态**: 待解决
+
+### 2. 相机2画面显示异常 (优先级: 高)
+
+**问题描述**: 
+通过下拉框选择索引为 2 的相机后，应用主界面显示的画面为雪花状乱码（噪点），而非正常的实时视频流。此相机在其他软件（如 Windows 相机应用）中可以正常显示。
+
+**初步分析**: 
+- OpenCV 可能未能正确识别或使用相机 2 支持的视频流格式或分辨率。
+- `cv2.VideoCapture` 使用的后端 API (如 DSHOW, MSMF) 可能与相机 2 的驱动存在兼容性问题。
+- 尽管其他软件能用，但 OpenCV 的访问方式可能触发了驱动的某个问题。
+
+**建议排查步骤**: 
+1.  **检查日志**: 仔细查看应用运行时选择相机 2 后的详细日志，寻找 OpenCV 或 CameraWorker 相关的警告或错误信息。
+2.  **尝试设置分辨率**: 在 `CameraWorker` 的 `run` 方法中，成功打开相机 (`self.cap.isOpened()`) 后，尝试使用 `self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)` 和 `self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)` (或其他常用分辨率如 640x480) 显式设置分辨率，再开始读取帧。
+3.  **尝试不同后端**: 修改 `CameraWorker`，强制只使用 `cv2.CAP_MSMF` 或只使用 `cv2.CAP_DSHOW` 来打开相机 2，看是否能解决问题。
+4.  **独立测试脚本**: 编写一个极简的 Python 脚本，仅使用 `cv2.VideoCapture(2)` 或 `cv2.VideoCapture(2, cv2.CAP_MSMF)` 等方式打开相机 2 并显示画面，排除应用其他部分的干扰。
+
+**实施状态**: 待解决
 
 ## 已解决问题
 
-### 1. 上传图片识别导致应用闪退 
+### 3. 无法选择或切换相机
+
+**问题描述**: 
+当检测到多个相机时，用户无法通过UI控件选择使用哪个相机。
+
+**解决方案**:
+1. 在 `src/ui/main_window.py` 中添加了 `QComboBox` 控件。
+2. 在 `_init_camera` 方法中调用 `detect_available_cameras` 获取可用相机列表并填充下拉框。
+3. 实现了 `on_camera_selection_changed` 方法处理用户选择，并在相机运行时停止旧相机、启动新相机。
+4. 修改了 `start_camera` 方法以使用用户选择的相机索引。
+5. 调整了 UI 状态管理，确保在相机运行时允许用户切换相机。
+
+**实施状态**: 已解决 (V1.3)
+
+### 4. 相机识别后无法恢复实时预览
+
+**问题描述**: 
+在相机模式下点击识别后，画面暂停显示结果，但没有提供恢复实时预览的按钮。
+
+**解决方案**: 
+1. 重新在 `_setup_ui` 中添加了 `resume_camera_button`。
+2. 恢复了 `resume_camera` 方法的实现。
+3. 在 `_perform_camera_recognition` 识别完成、暂停画面后，启用 `resume_camera_button` 并设置 `self.pause_camera_updates = True`。
+4. 确保 `update_frame` 检查 `pause_camera_updates` 标志。
+
+**实施状态**: 已解决 (V1.3)
+
+### 5. 上传图片识别导致应用闪退 
 
 **问题描述**: 
 上传图片后点击识别按钮会导致应用程序崩溃。
@@ -17,7 +79,7 @@
 
 **实施状态**: 已解决
 
-### 2. 识别记录无法保存 
+### 6. 识别记录无法保存 
 
 **问题描述**:
 识别完成后，相关结果无法保存到历史记录数据库中。
@@ -29,7 +91,7 @@
 
 **实施状态**: 已解决
 
-### 3. 识别内容显示可读性问题 
+### 7. 识别内容显示可读性问题 (部分解决)
 
 **问题描述**:
 主页面识别内容缺乏视觉区分，需要在图像上直接标记识别到的文字区域。在相机模式下，识别后主界面仍显示实时相机画面，无法看到标记的文本框。
@@ -39,134 +101,14 @@
 2. 在相机模式和静态图片模式下的识别过程中，都添加了绘制文本框的代码
 3. 使用不同颜色区分不同类型的文本（绿色表示标牌文字，红色表示喷码文字）
 4. 移除了文本标签中的序号前缀，只显示文本内容和置信度
-5. 添加了暂停相机画面更新的功能，确保在识别完成后显示带有文本框标记的抓取画面
-6. 重构了相机识别过程，使用QTimer延时确保获取最新画面
-7. 添加了"恢复相机"按钮，允许用户在查看识别结果后恢复实时相机画面，方便调整画面内容
+5. 添加了暂停相机画面更新的功能 (`pause_camera_updates`)，确保在识别完成后显示带有文本框标记的抓取画面。
+6. 添加了"恢复相机"按钮 (`resume_camera_button`)，允许用户在查看识别结果后恢复实时相机画面。
 
-具体实现：
-```python
-def _draw_text_boxes(self, image, text_boxes):
-    """在图像上绘制文本框"""
-    if image is None or not text_boxes:
-        return image
-        
-    # 创建图像副本，避免修改原图
-    marked_image = image.copy()
-    
-    # 为不同类型的文本设置不同颜色
-    colors = [
-        (0, 255, 0),    # 绿色 - 标牌文字
-        (0, 0, 255),    # 红色 - 喷码文字
-        (255, 0, 0)     # 蓝色 - 其他文字
-    ]
-    
-    # 绘制每个文本框
-    for i, (box, text, confidence, _) in enumerate(text_boxes):
-        # 确定颜色索引
-        color_idx = i % len(colors) if i < 2 else 2
-        color = colors[color_idx]
-        
-        # 绘制文本框
-        points = np.array(box).astype(np.int32).reshape((-1, 1, 2))
-        cv2.polylines(marked_image, [points], True, color, 2)
-        
-        # 添加文本标签
-        label = f"{text} ({confidence:.2f})"
-        min_x = min(point[0] for point in box)
-        min_y = min(point[1] for point in box)
-        cv2.putText(marked_image, label, (int(min_x), int(min_y) - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-    
-    return marked_image
+**实施状态**: 部分解决 (暂停/恢复机制已实现，但标记内容本身的可读性可进一步优化)
 
-# 添加暂停标志
-self.pause_camera_updates = False
+### 8. 文本区分策略不合理 -> 移至待解决
 
-# 修改update_frame方法，在暂停状态下不更新画面
-def update_frame(self, frame: np.ndarray):
-    if not self.camera_running:
-        return
-        
-    # 如果暂停相机画面更新，则不更新画面
-    if self.pause_camera_updates:
-        return
-        
-    # 保存当前帧并更新显示
-    self.cv_image = frame.copy()
-    # ...
-
-# 在识别完成后暂停相机画面更新
-self.pause_camera_updates = True
-
-# 在_recognize_current_frame方法中重置暂停状态
-def _recognize_current_frame(self):
-    # ...
-    if self.camera_running and self.cv_image is not None:
-        # 重置暂停状态，确保获取最新的相机画面
-        self.pause_camera_updates = False
-        # 短暂延时，确保获取到最新的画面
-        QTimer.singleShot(100, self._perform_camera_recognition)
-
-# 添加恢复相机按钮
-self.resume_camera_button = QPushButton(" 恢复相机")
-self.resume_camera_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-self.resume_camera_button.setEnabled(False)  # 初始状态下禁用
-self.resume_camera_button.clicked.connect(self.resume_camera)
-button_layout.addWidget(self.resume_camera_button)
-
-# 在识别完成后暂停相机画面更新并启用恢复按钮
-self.pause_camera_updates = True
-self.resume_camera_button.setEnabled(True)
-
-# 恢复相机实时画面的方法
-def resume_camera(self):
-    """恢复相机实时画面"""
-    self.pause_camera_updates = False
-    self.resume_camera_button.setEnabled(False)
-
-### 4. 文本区分策略不合理
-
-**问题描述**: 
-当前代码简单地根据文本框Y坐标位置区分上下文本（标牌/喷码），这种方法不够灵活，无法适应不同图像布局，特别是标牌竖放时完全无法区分。
-
-**原因分析**:
-在 `_recognize_current_frame` 方法中，使用了固定的Y坐标位置划分策略：
-```python
-# 假设上半部分是标牌文字，下半部分是喷码文字
-height = self.cv_image.shape[0]
-middle_y = height / 2
-for item in text_with_positions:
-    if center_y < middle_y:
-        label_texts.append(text)
-    else:
-        print_texts.append(text)
-```
-
-**解决方案**:
-1. 不预先区分标牌/喷码文字，而是将所有识别到的文本列出
-2. 向UI中添加两个下拉列表或文本框，让用户可以选择或输入要比对的文本
-3. 显示所有识别出的文本，例如：
-```python
-# 识别所有文本，不区分类型
-all_detected_texts = []
-for item in text_with_positions:
-    box, text, confidence, center_y = item
-    all_detected_texts.append((text, confidence))
-
-# 显示所有文本供用户选择
-self.detected_texts_label.setText("识别到的所有文本：\n" + "\n".join([f"{i+1}. {text} (置信度: {conf:.2f})" for i, (text, conf) in enumerate(all_detected_texts)]))
-
-# 添加下拉选择框让用户指定
-self.label_text_combo = QComboBox()
-self.print_text_combo = QComboBox()
-for text, _ in all_detected_texts:
-    self.label_text_combo.addItem(text)
-    self.print_text_combo.addItem(text)
-```
-
-**实施状态**: 待解决
-
-### 5. 图片识别和相机识别模式切换功能
+### 9. 图片识别和相机识别模式切换功能
 
 **问题描述**: 
 当前应用程序无法在图片识别和相机识别模式之间切换。
@@ -175,45 +117,13 @@ for text, _ in all_detected_texts:
 缺少实现模式切换的代码。
 
 **解决方案**:
-1. 添加模式切换按钮
-2. 实现模式切换逻辑
-3. 在相机模式下添加暂停相机画面更新的功能
-
-具体实现：
-```python
-# 添加模式切换按钮
-self.mode_switch_button = QPushButton(" 切换模式")
-self.mode_switch_button.clicked.connect(self.switch_mode)
-button_layout.addWidget(self.mode_switch_button)
-
-# 实现模式切换逻辑
-def switch_mode(self):
-    if self.current_mode == "图片识别":
-        self.current_mode = "相机识别"
-        # 启动相机
-        self.start_camera()
-    else:
-        self.current_mode = "图片识别"
-        # 停止相机
-        self.stop_camera()
-
-# 在相机模式下添加暂停相机画面更新的功能
-def update_frame(self, frame: np.ndarray):
-    if not self.camera_running:
-        return
-        
-    # 如果暂停相机画面更新，则不更新画面
-    if self.pause_camera_updates:
-        return
-        
-    # 保存当前帧并更新显示
-    self.cv_image = frame.copy()
-    # ...
-```
+1. 添加了模式切换按钮 `switch_mode_button`。
+2. 实现了 `switch_to_camera_mode` 和 `switch_to_image_mode` 方法。
+3. 在相应场景调用这些方法来切换 UI 状态和相机启停。
 
 **实施状态**: 已解决
 
-### 6. 上传图像识别后切换为相机导致应用闪退
+### 10. 上传图像识别后切换为相机导致应用闪退
 
 **问题描述**: 
 上传图像识别后切换为相机模式导致应用闪退。
@@ -222,62 +132,26 @@ def update_frame(self, frame: np.ndarray):
 在 `switch_to_camera_mode` 方法中先停止相机再启动相机，但在上传图像识别后相机并未启动，导致 `stop_camera` 方法出错。
 
 **解决方案**:
-1. 修改 `switch_to_camera_mode` 方法，先检查相机是否已经启动
-2. 移除不必要的 `stop_camera` 调用
-3. 在启动相机前清除当前图像显示并重置相关变量
+1. 修改 `switch_to_camera_mode` 方法，先检查相机是否已经启动。
+2. 调整 `start_camera` 和 `stop_camera` 逻辑，确保状态正确管理。
 
-### 7. UI进一步优化
+**实施状态**: 已解决
+
+### 11. UI进一步优化
 
 **问题描述**:
-1. 在点击恢复相机瞬间和上传新的图片瞬间，之前的识别结果框没有清空，导致用户可能会看到旧的识别结果。
-2. 图片识别后的文本框上的字体大小固定，没有与图片长宽匹配，导致在不同尺寸的图片上显示效果不一致。
-3. 文本框标签可能会超出图片边界，影响可读性。
-4. 文本框背景半透明，在某些背景下可能影响文本可读性。
-5. 置信度和主文本使用相同字体大小，不易区分。
+1. 在点击恢复相机瞬间和上传新的图片瞬间，之前的识别结果框没有清空。
+2. 图片识别后的文本框上的字体大小固定。
+3. 文本框标签可能会超出图片边界。
+4. 文本框背景半透明。
+5. 置信度和主文本使用相同字体大小。
 
 **解决方案**:
-1. 添加了`clear_recognition_results`方法，用于清空识别结果并重置背景颜色。
-2. 在以下场景中调用此方法：
-   - 切换到相机模式时
-   - 切换到图片模式时
-   - 恢复相机时
-   - 上传新图片时
-3. 修改了`_draw_text_boxes`方法：
-   - 使文本框字体大小根据图片尺寸自动调整：`font_scale = min(width, height) / 500`
-   - 增大字体大小，使其更加清晰可见
-   - 添加边界检测逻辑，确保文本不会超出图片边界
-   - 将文本背景从半透明改为纯白色，提高可读性
-   - 将置信度字体大小调整为主文本的一半，并使用灰色显示，便于区分
+1. 添加了`clear_recognition_results`方法，并在切换模式、恢复相机、上传图片时调用。
+2. 修改了`_draw_text_boxes`方法：
+   - 文本框字体大小根据图片尺寸自动调整。
+   - 添加边界检测逻辑。
+   - 将文本背景改为纯白色。
+   - 调整置信度字体大小和颜色。
 
-### 状态
-
-- [x] 已解决
-
-### 相关文件
-
-- `src/ui/main_window.py`
-
-### 备注
-
-这些改进使应用程序在使用过程中更加稳定和用户友好。当切换模式或上传新图片时，识别结果会被清空，避免显示旧的结果造成混淆。同时，文本框的字体大小会根据图片尺寸自动调整，确保在不同尺寸的图片上都能清晰显示文本，并且不会超出图片边界。文本和置信度的区分显示使得用户更容易关注主要文本内容。
-
-## 待解决问题
-
-### 文本区分策略问题
-- **问题描述**: 当前基于Y坐标区分标牌文字和喷码文字的策略不可靠，特别是当标牌竖放时完全失效
-- **原因**: 简单地假设Y坐标较小的是标牌文字，Y坐标较大的是喷码文字
-- **解决方案**: 
-  - 修改应用程序，允许用户手动选择标牌文字和喷码文字
-  - 添加UI元素（如下拉列表）供用户选择
-  - 重构比对逻辑，使用用户选择的文本
-
-## 优先级与修复计划
-
-1. **高优先级**: 优化文本区分策略
-   - 修改为不预先区分标牌/喷码文字的方案
-   - 添加用户选择界面元素
-   - 重构相关比对逻辑
-
-2. **中优先级**: 进一步改进识别内容显示，提高可读性
-   - 为不同类型的结果添加更明显的视觉区分
-   - 考虑使用QFrame替代QLabel或添加更明显的分隔
+**实施状态**: 已解决
