@@ -23,6 +23,7 @@ from src.utils.database_manager import init_db, add_history_record, check_histor
 from src.ui.history_window import HistoryWindow
 from src.workers.camera_worker import CameraWorker
 from src.utils.camera_utils import detect_available_cameras
+from src.core.text_comparator import TextComparator # 导入 TextComparator
 import logging
 
 # Attempt to import the OCR processor
@@ -160,6 +161,9 @@ class MainWindow(QMainWindow):
         self._init_camera()
         # 自动启动摄像头
         self.start_camera()
+
+        # 实例化 TextComparator
+        self.text_comparator = TextComparator()
 
     def _init_processor(self):
         """
@@ -577,8 +581,8 @@ class MainWindow(QMainWindow):
             # --- Placeholder for comparison logic --- 
             if label_text != "未识别" and print_text != "未识别":
                 # 计算相似度
-                import difflib
-                similarity = difflib.SequenceMatcher(None, label_text, print_text).ratio()
+                comparison_details = self.text_comparator.compare_texts(label_text, print_text)
+                similarity = comparison_details['similarity'] # 从字典中提取相似度
                 similarity_percent = int(similarity * 100)
                 
                 # 判断是否通过 (100%相似度才通过)
@@ -684,8 +688,9 @@ class MainWindow(QMainWindow):
             qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
             pixmap = QPixmap.fromImage(qt_image)
             pixmap = self._resize_pixmap(pixmap)
-            self.image_label.setPixmap(pixmap)
-            
+            self.image_label.setPixmap(pixmap) # Display frame
+            self.current_image = None # Ensure static image is cleared
+
             # 暂停相机画面更新，保持显示标记后的画面
             self.pause_camera_updates = True
             self.resume_camera_button.setEnabled(True) # Enable the resume button
@@ -725,9 +730,9 @@ class MainWindow(QMainWindow):
             
             # 比对文本相似度
             if label_text != "<未识别到标牌文字>" and print_text != "<未识别到喷码文字>":
-                # 计算相似度 (可以使用更复杂的算法)
-                import difflib
-                similarity = difflib.SequenceMatcher(None, label_text, print_text).ratio()
+                # 计算相似度 (使用 TextComparator)
+                comparison_details = self.text_comparator.compare_texts(label_text, print_text)
+                similarity = comparison_details['similarity'] # 从字典中提取相似度
                 similarity_percent = int(similarity * 100)
                 
                 # 判断是否通过 (100%相似度才通过)
