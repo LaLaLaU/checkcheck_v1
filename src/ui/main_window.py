@@ -533,7 +533,8 @@ class MainWindow(QMainWindow):
             previous_selection = self.selected_camera_index
             
             # 停止当前摄像头
-            self.stop_camera()
+            if self.camera_running:
+                self.stop_camera()
             
             # 执行扫描并更新下拉框
             newly_found = self._scan_other_cameras(update_combo=True, initial_scan=False)
@@ -572,10 +573,18 @@ class MainWindow(QMainWindow):
             # 用户选择了特定摄像头
             new_camera_index = selected_data
             if new_camera_index != self.selected_camera_index or not self.camera_running:
-                logger.info(f"Camera selection changed to index {new_camera_index} or camera not running.")
-                self.stop_camera()  # 停止当前摄像头
-                self.selected_camera_index = new_camera_index
-                QTimer.singleShot(100, self.start_camera)  # 短暂延迟后启动新摄像头
+                logger.info(f"Camera selection changed to index {new_camera_index}. Current state running: {self.camera_running}")
+                self.selected_camera_index = new_camera_index # Update the index first
+                if self.camera_running:
+                    logger.info("Camera is running, stopping it first...")
+                    self.stop_camera()  # Stop the current camera
+                    # Start the new camera after the old one has fully stopped.
+                    # Use a small delay to ensure the stop process completes in the event loop.
+                    QTimer.singleShot(100, self.start_camera)
+                else:
+                    logger.info("Camera is not running, starting the selected camera directly.")
+                    # Camera is already stopped (e.g., after scanning or initial state), start directly
+                    self.start_camera() # Start the new camera immediately
 
     def on_upload_image(self):
         """
@@ -1273,6 +1282,12 @@ class MainWindow(QMainWindow):
         # Explicitly set running state false *after* confirming thread stop (or timeout)
         self.camera_running = False
         logger.info("Camera thread stopped and resources potentially released.") # Adjusted message
+
+        # Clear references to the old thread and worker after stopping
+        # Let deleteLater handle the actual deletion by Qt's event loop
+        self.camera_thread = None
+        self.camera_worker = None
+        logger.info("Cleared references to camera_thread and camera_worker.")
 
         # Reset image label 
         self.image_label.clear() # Clear pixmap first
