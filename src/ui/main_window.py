@@ -1413,7 +1413,7 @@ class MainWindow(QMainWindow):
         self.pass_sound.setVolume(0.8) # 可选：调整音量
 
         self.fail_sound = QSoundEffect(self)
-        fail_sound_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'assets', 'sounds', 'fail.mp3') # Adjust if using .mp3
+        fail_sound_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'assets', 'sounds', 'fail.wav') # Adjust if using .mp3
         if not os.path.exists(fail_sound_path):
             logger.warning(f"Fail sound file not found at: {fail_sound_path}")
             self.fail_sound.setSource(QUrl()) # Set empty source if not found
