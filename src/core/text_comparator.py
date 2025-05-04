@@ -9,6 +9,7 @@ CheckCheck 导管喷码自动核对系统 - 文本比对模块
 import difflib
 from typing import Dict, List, Tuple
 import logging
+import re # 导入 re 模块
 
 logger = logging.getLogger(__name__)
 
@@ -80,9 +81,9 @@ class TextComparator:
         Returns:
             float: 相似度（0-1之间的浮点数）
         """
-        # 移除空格和英文句点进行比较
-        text1_filtered = "".join(text1.split()).replace(".", "")
-        text2_filtered = "".join(text2.split()).replace(".", "")
+        # 过滤文本：只保留字母和数字
+        text1_filtered = re.sub(r'[^a-zA-Z0-9]', '', text1)
+        text2_filtered = re.sub(r'[^a-zA-Z0-9]', '', text2)
 
         # 添加调试日志
         logger.debug(f"Comparing filtered texts:")

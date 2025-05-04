@@ -7,3 +7,4 @@
 - 确认比对功能现在可以正常工作，并按预期忽略空格/句点。
 - 控制台调试日志验证了过滤和比对逻辑的正确执行。
 - Implemented pass/fail sound effects on recognition result.
+- Refined text comparison logic in `src/core/text_comparator.py` to ignore all non-alphanumeric characters using regex, improving comparison accuracy.

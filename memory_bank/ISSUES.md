@@ -165,3 +165,9 @@
 修改 `on_camera_selection_changed`，仅在摄像头运行时停止；修改 `stop_camera`，在停止线程后清除对 `camera_thread` 和 `camera_worker` 的引用。
 
 **实施状态**: 已解决
+
+## 已解决 / Closed Issues
+
+*   **ISSUE-XXX: 比对逻辑未处理所有特殊符号 (例如逗号)**
+    *   **状态:** 已解决 (Closed)
+    *   **解决方案:** 更新了 `src/core/text_comparator.py` 中的 `_calculate_similarity` 方法，使用正则表达式 `re.sub(r'[^a-zA-Z0-9]', '', text)` 来过滤文本，只保留字母和数字进行比较。
