@@ -4,7 +4,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def detect_available_cameras(max_cameras_to_check: int = 10) -> List[int]:
+def detect_available_cameras(max_cameras_to_check: int = 4) -> List[int]:
     """
     检测系统中可用的摄像头索引。
 
@@ -15,7 +15,7 @@ def detect_available_cameras(max_cameras_to_check: int = 10) -> List[int]:
         一个包含可用摄像头索引的列表。
     """
     available_indices = []
-    logger.info(f"正在检测最多 {max_cameras_to_check} 个摄像头...")
+    logger.info(f"正在检测最多 {max_cameras_to_check} 个摄像头...".encode('utf-8').decode('utf-8')) 
     for i in range(max_cameras_to_check):
         # 尝试使用 CAP_DSHOW，这是 Windows 上常用的 API
         cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)

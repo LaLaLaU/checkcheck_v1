@@ -14,9 +14,9 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QFileDialog, QMessageBox,
     QSplitter, QFrame, QGroupBox, QProgressDialog,
-    QApplication, QFormLayout, QStyle, QComboBox
+    QApplication, QFormLayout, QStyle, QComboBox, QTableWidgetItem, QTableWidget
 )
-from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader
+from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader, QPalette, QColor
 from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, QThread, QTimer
 from src.core.processor import ImageProcessor
 from src.utils.database_manager import init_db, add_history_record, check_history_exists
@@ -134,7 +134,7 @@ class MainWindow(QMainWindow):
         self.ocr_processor = None # OCR 处理器
         self.pause_camera_updates = False
         self.available_cameras = [] # List to store available camera indices
-        self.selected_camera_index = 0 # Default/selected camera index
+        self.selected_camera_index = 1 # Default/selected camera index
         self.current_mode = "相机识别" # Default mode
 
         # 定义颜色常量
@@ -230,8 +230,23 @@ class MainWindow(QMainWindow):
             for index in self.available_cameras:
                 self.camera_selection_combo.addItem(f"相机 {index}", userData=index) # Store index in userData
             self.camera_selection_combo.setEnabled(True)
-            # Set initial selection to the first detected camera
-            self.camera_selection_combo.setCurrentIndex(0) 
+            # --- 设置默认摄像头为索引1（如果可用） ---
+            default_camera_index_to_select = 1
+            initial_selection_done = False
+            if default_camera_index_to_select in self.available_cameras:
+                for i in range(self.camera_selection_combo.count()):
+                    if self.camera_selection_combo.itemData(i) == default_camera_index_to_select:
+                        self.camera_selection_combo.setCurrentIndex(i)
+                        initial_selection_done = True
+                        logger.info(f"Defaulting to camera index {default_camera_index_to_select}.")
+                        break
+            
+            # 如果索引1不可用或未找到，则默认选择第一个摄像头
+            if not initial_selection_done:
+                self.camera_selection_combo.setCurrentIndex(0)
+                logger.info(f"Default camera index {default_camera_index_to_select} not found or unavailable. Defaulting to first available camera.")
+            # -------------------------------------
+
             self.selected_camera_index = self.camera_selection_combo.currentData() # Get index from userData
             self.statusBar().showMessage(f'检测到多个相机，已选择相机 {self.selected_camera_index}')
              # Ensure camera buttons are enabled
@@ -1273,3 +1288,100 @@ class MainWindow(QMainWindow):
         self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
         # 清除处理结果
         self.processing_result = None
+
+    def _load_history(self):
+        """从数据库加载历史记录到表格"""
+        try:
+            history_data = self.db_manager.get_history()
+            self.history_table.setRowCount(len(history_data))
+            
+            for row_position, record in enumerate(history_data):
+                # record 格式: (id, timestamp, image_path, label_text, print_text, similarity, result)
+                record_id, timestamp, image_path, label_text, print_text, similarity, result = record
+
+                # 创建并设置单元格项
+                self.history_table.setItem(row_position, 0, QTableWidgetItem(timestamp))
+                self.history_table.setItem(row_position, 1, QTableWidgetItem(label_text))
+                self.history_table.setItem(row_position, 2, QTableWidgetItem(print_text))
+                similarity_item = QTableWidgetItem(f"{similarity*100:.0f}%")
+                similarity_item.setTextAlignment(Qt.AlignCenter)
+                self.history_table.setItem(row_position, 3, similarity_item)
+                result_item = QTableWidgetItem(result)
+                result_item.setTextAlignment(Qt.AlignCenter)
+                # 根据结果设置颜色 (可选)
+                if result == '通过':
+                    result_item.setForeground(QColor('green'))
+                elif result == '失败':
+                    result_item.setForeground(QColor('red'))
+                self.history_table.setItem(row_position, 4, result_item)
+
+                # --- 添加缩略图 ---
+                thumbnail_widget = QLabel("无图像")
+                thumbnail_widget.setAlignment(Qt.AlignCenter)
+                if image_path and os.path.exists(image_path):
+                    pixmap = QPixmap(image_path)
+                    if not pixmap.isNull(): # 确保图像加载成功
+                        # 获取行高进行缩放 (或者使用固定尺寸)
+                        row_height = self.history_table.rowHeight(row_position)
+                        if row_height <= 0: # 如果行高未设置或无效，使用默认值
+                             row_height = self.history_table.verticalHeader().defaultSectionSize()
+                        target_size = QSize(self.history_table.columnWidth(5)-10, row_height-10) # 留一点边距
+                        scaled_pixmap = pixmap.scaled(target_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                        thumbnail_widget.setPixmap(scaled_pixmap)
+                    else:
+                        thumbnail_widget.setText("图像无效")
+                
+                self.history_table.setCellWidget(row_position, 5, thumbnail_widget)
+                # ------------------
+
+            # logger.info(f"Loaded {len(history_data)} history records.")
+        except Exception as e:
+            logger.error(f"Error loading history: {e}", exc_info=True)
+            QMessageBox.critical(self, "错误", f"加载历史记录失败: {e}")
+
+    def _add_record_to_history(self, timestamp: str, label_text: str, print_text: str, similarity: float, result: str, image_path: str):
+        """将单条记录添加到历史记录表格顶部"""
+        self.history_table.insertRow(0)
+        self.history_table.setItem(0, 0, QTableWidgetItem(timestamp))
+        self.history_table.setItem(0, 1, QTableWidgetItem(label_text))
+        self.history_table.setItem(0, 2, QTableWidgetItem(print_text))
+        similarity_item = QTableWidgetItem(f"{similarity*100:.0f}%")
+        similarity_item.setTextAlignment(Qt.AlignCenter)
+        self.history_table.setItem(0, 3, similarity_item)
+        result_item = QTableWidgetItem(result)
+        result_item.setTextAlignment(Qt.AlignCenter)
+        if result == '通过':
+            result_item.setForeground(QColor('green'))
+        elif result == '失败':
+            result_item.setForeground(QColor('red'))
+        self.history_table.setItem(0, 4, result_item)
+
+        # --- 添加缩略图 ---
+        thumbnail_widget = QLabel("无图像")
+        thumbnail_widget.setAlignment(Qt.AlignCenter)
+        if image_path and os.path.exists(image_path):
+            pixmap = QPixmap(image_path)
+            if not pixmap.isNull():
+                row_height = self.history_table.rowHeight(0)
+                if row_height <= 0:
+                    row_height = self.history_table.verticalHeader().defaultSectionSize()
+                target_size = QSize(self.history_table.columnWidth(5)-10, row_height-10)
+                scaled_pixmap = pixmap.scaled(target_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                thumbnail_widget.setPixmap(scaled_pixmap)
+            else:
+                thumbnail_widget.setText("图像无效")
+        
+        self.history_table.setCellWidget(0, 5, thumbnail_widget)
+        # ------------------
+
+    def _save_record(self, image_path: str, label_text: str, print_text: str, similarity: float, result: str):
+        """将单条记录保存到数据库并返回记录ID"""
+        try:
+            # 调用数据库函数保存记录
+            from src.utils.database_manager import add_history_record
+            record_id = add_history_record(image_path, label_text, print_text, similarity, result)
+            logger.info(f"Record saved: {image_path}, {label_text}, {print_text}, {similarity}, {result}")
+            return record_id
+        except Exception as e:
+            logger.error(f"Failed to save record: {e}")
+            return None
