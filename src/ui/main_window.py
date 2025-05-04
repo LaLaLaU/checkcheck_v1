@@ -17,7 +17,8 @@ from PyQt5.QtWidgets import (
     QApplication, QFormLayout, QStyle, QComboBox, QTableWidgetItem, QTableWidget
 )
 from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader, QPalette, QColor
-from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, QThread, QTimer
+from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, QThread, QTimer, QUrl
+from PyQt5.QtMultimedia import QSoundEffect
 from src.core.processor import ImageProcessor
 from src.utils.database_manager import init_db, add_history_record, check_history_exists
 from src.ui.history_window import HistoryWindow
@@ -164,6 +165,9 @@ class MainWindow(QMainWindow):
 
         # 实例化 TextComparator
         self.text_comparator = TextComparator()
+
+        # 初始化音效
+        self._init_sounds()
 
     def _setup_ui(self):
         """
@@ -823,9 +827,19 @@ class MainWindow(QMainWindow):
                 if similarity_percent == 100:
                     comparison = f"<span style='color:green; font-weight:bold;'>✓ 通过</span> (相似度: {similarity_percent}%)"
                     background_color = self.pass_background_color
+                    # Play pass sound
+                    if self.pass_sound.source().isValid():
+                        self.pass_sound.play()
+                    else:
+                        logger.warning("Pass sound not loaded or invalid, cannot play.")
                 else:
                     comparison = f"<span style='color:red; font-weight:bold;'>✗ 不通过</span> (相似度: {similarity_percent}%)"
                     background_color = self.fail_background_color
+                    # Play fail sound
+                    if self.fail_sound.source().isValid():
+                        self.fail_sound.play()
+                    else:
+                        logger.warning("Fail sound not loaded or invalid, cannot play.")
             else:
                 comparison = "<span style='color:orange; font-weight:bold;'>? 无法比对</span>"
                 background_color = self.fail_background_color
@@ -950,9 +964,19 @@ class MainWindow(QMainWindow):
                 if similarity_percent == 100:
                     result_text = f"<span style='color:green; font-weight:bold;'>✓ 通过</span> (相似度: {similarity_percent}%)"
                     background_color = self.pass_background_color
+                    # Play pass sound
+                    if self.pass_sound.source().isValid():
+                        self.pass_sound.play()
+                    else:
+                        logger.warning("Pass sound not loaded or invalid, cannot play.")
                 else:
                     result_text = f"<span style='color:red; font-weight:bold;'>✗ 不通过</span> (相似度: {similarity_percent}%)"
                     background_color = self.fail_background_color
+                    # Play fail sound
+                    if self.fail_sound.source().isValid():
+                        self.fail_sound.play()
+                    else:
+                        logger.warning("Fail sound not loaded or invalid, cannot play.")
             else:
                 result_text = "<span style='color:orange; font-weight:bold;'>? 无法比对</span>"
                 background_color = self.fail_background_color
@@ -1373,31 +1397,27 @@ class MainWindow(QMainWindow):
             except TypeError: pass
             self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
 
-    def update_camera_status(self, opened: bool):
-        """更新摄像头状态标签和按钮"""
-        self.camera_running = opened
-        # Always ensure combo box is enabled if multiple cameras exist
-        if self.available_cameras and len(self.available_cameras) > 1:
-            self.camera_selection_combo.setEnabled(True) 
-
-        if opened:
-            logger.info(f"Camera {self.selected_camera_index} successfully opened.")
-            self.statusBar().showMessage(f'相机 {self.selected_camera_index} 已连接')
-            self.recognize_button.setEnabled(True) # Enable recognition button
-            self.switch_mode_button.setText(" 切换到图片")
-            self.switch_mode_button.setIcon(QIcon(os.path.join("resources", "icons", "image_mode.png"))) # Update icon maybe?
-            try:
-                self.switch_mode_button.clicked.disconnect()
-            except TypeError: pass
-            self.switch_mode_button.clicked.connect(self.switch_to_image_mode)
+    def _init_sounds(self):
+        """
+        初始化通过和失败的音效
+        """
+        self.pass_sound = QSoundEffect(self)
+        # 构建相对于项目根目录的路径
+        pass_sound_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'assets', 'sounds', 'pass.wav') # Adjust if using .mp3
+        if not os.path.exists(pass_sound_path):
+             logger.warning(f"Pass sound file not found at: {pass_sound_path}")
+             self.pass_sound.setSource(QUrl()) # Set empty source if not found
         else:
-            logger.error(f"Failed to open camera {self.selected_camera_index}.")
-            self.statusBar().showMessage(f'相机 {self.selected_camera_index} 打开失败')
-            # Message box is now handled in handle_camera_error which is usually triggered before this
-            # Ensure UI reflects image mode state as camera failed
-            self.recognize_button.setEnabled(False) # Can't recognize if camera failed
-            self.switch_mode_button.setText(" 切换到相机")
-            self.switch_mode_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-            try: self.switch_mode_button.clicked.disconnect()
-            except TypeError: pass
-            self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
+            self.pass_sound.setSource(QUrl.fromLocalFile(pass_sound_path))
+            logger.info(f"Loaded pass sound from: {pass_sound_path}")
+        self.pass_sound.setVolume(0.8) # 可选：调整音量
+
+        self.fail_sound = QSoundEffect(self)
+        fail_sound_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'assets', 'sounds', 'fail.mp3') # Adjust if using .mp3
+        if not os.path.exists(fail_sound_path):
+            logger.warning(f"Fail sound file not found at: {fail_sound_path}")
+            self.fail_sound.setSource(QUrl()) # Set empty source if not found
+        else:
+            self.fail_sound.setSource(QUrl.fromLocalFile(fail_sound_path))
+            logger.info(f"Loaded fail sound from: {fail_sound_path}")
+        self.fail_sound.setVolume(0.8) # 可选：调整音量
