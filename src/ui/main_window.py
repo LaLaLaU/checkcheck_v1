@@ -26,6 +26,7 @@ from src.workers.camera_worker import CameraWorker
 from src.utils.camera_utils import detect_available_cameras
 from src.core.text_comparator import TextComparator # 导入 TextComparator
 import logging
+import re # Added for preprocessing
 
 # Attempt to import the OCR processor
 try:
@@ -1111,60 +1112,74 @@ class MainWindow(QMainWindow):
             color_idx = i % len(colors) if i < 2 else 2
             color = colors[color_idx]
             
-            # 绘制文本框
-            points = np.array(box).astype(np.int32).reshape((-1, 1, 2))
-            cv2.polylines(marked_image, [points], True, color, 2)
-            
-            # 计算文本框左上角坐标，用于放置文本标签
-            min_x = min(point[0] for point in box)
-            min_y = min(point[1] for point in box)
-            
-            # 分离文本和置信度
-            text_part = text
-            confidence_part = f"({confidence:.2f})"
-            
-            # 计算文本和置信度的尺寸
-            (text_width, text_height), _ = cv2.getTextSize(text_part, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 2)
-            (conf_width, conf_height), _ = cv2.getTextSize(confidence_part, cv2.FONT_HERSHEY_SIMPLEX, font_scale/2, 1)
-            
-            # 确保文本不会超出图片边界
-            text_bg_min_x = int(min_x)
-            text_bg_min_y = int(min_y) - text_height - 10
-            
-            # 如果文本超出左边界，调整到左边界
-            if text_bg_min_x < 0:
-                text_bg_min_x = 0
+            # Initialize coordinates and extraction flag
+            coordinates_extracted = False
+            x1, y1, x2, y2 = 0, 0, 0, 0 # Default values
+
+            # Check box format and extract coordinates
+            if isinstance(box, list) and len(box) == 4 and isinstance(box[0], list) and len(box[0]) == 2:
+                try: # Handle potential errors during point processing
+                    pts = np.array(box, dtype=np.int32)
+                    # Draw the polygon bounding box first
+                    cv2.polylines(marked_image, [pts], isClosed=True, color=color, thickness=2)
+                    # Extract top-left (x1, y1) for text positioning reference
+                    x1, y1 = pts[0] 
+                    # x2, y2 = pts[2] # Bottom-right might not be needed for text
+                    coordinates_extracted = True
+                except Exception as e:
+                     self.logger.warning(f"Error processing polygon box points {box}: {e}")
+            elif isinstance(box, (list, tuple)) and len(box) == 4:
+                try: # Handle potential errors during point processing
+                     # Assuming [x1, y1, x2, y2] format
+                    x1, y1, x2, y2 = map(int, box)
+                     # Draw rectangle bounding box first
+                    cv2.rectangle(marked_image, (x1, y1), (x2, y2), color, 2)
+                    coordinates_extracted = True
+                except Exception as e:
+                     self.logger.warning(f"Error processing rectangle box points {box}: {e}")
+            else:
+                self.logger.warning(f"Unsupported box format received: {box}. Cannot draw text for this box.")
+                # coordinates_extracted remains False
+
+            # --- Draw text only if coordinates were successfully extracted --- 
+            if coordinates_extracted:
+                # Filter text to keep only ASCII characters
+                ascii_text = ''.join(char for char in text if ord(char) < 128).strip()
                 
-            # 如果文本超出上边界，调整到文本框下方
-            if text_bg_min_y < 0:
-                text_bg_min_y = int(max(point[1] for point in box)) + 10
-                
-            text_bg_max_x = text_bg_min_x + text_width + conf_width
-            text_bg_max_y = text_bg_min_y + text_height + 10
-            
-            # 如果文本超出右边界，调整整个文本框位置
-            if text_bg_max_x > width:
-                offset = text_bg_max_x - width
-                text_bg_min_x = max(0, text_bg_min_x - offset)
-                text_bg_max_x = text_bg_min_x + text_width + conf_width
-                
-            # 如果文本超出下边界，调整到文本框上方
-            if text_bg_max_y > height:
-                text_bg_min_y = int(min(point[1] for point in box)) - text_height - 20
-                text_bg_max_y = text_bg_min_y + text_height + 10
-            
-            # 绘制纯白色背景（不再是半透明）
-            cv2.rectangle(marked_image, (text_bg_min_x, text_bg_min_y), (text_bg_max_x, text_bg_max_y), (255, 255, 255), -1)
-            
-            # 绘制主文本
-            cv2.putText(marked_image, text_part, (text_bg_min_x, text_bg_max_y - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, 2)
-            
-            # 绘制置信度（字体大小为主文本的一半）
-            conf_x = text_bg_min_x + text_width + 5  # 在主文本后留一点间距
-            cv2.putText(marked_image, confidence_part, (conf_x, text_bg_max_y - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_scale/2, (100, 100, 100), 1)  # 使用灰色显示置信度
-        
+                # Draw text only if there's something left after filtering
+                if ascii_text:
+                    try: # Add try-except for robustness in text drawing
+                        font_face = cv2.FONT_HERSHEY_SIMPLEX
+                        font_scale = 0.6
+                        text_thickness = 1
+                        (text_width, text_height), baseline = cv2.getTextSize(ascii_text, font_face, font_scale, text_thickness)
+
+                        # Calculate position for the text background (using guaranteed x1, y1)
+                        text_bg_x1 = x1
+                        text_bg_y1 = y1 - text_height - baseline - 4 # Position background above the box top
+                        text_bg_x2 = x1 + text_width + 4
+                        text_bg_y2 = y1 # Align bottom of background with box top
+
+                        # Ensure background is within image bounds (simple check)
+                        text_bg_y1 = max(text_bg_y1, 0)
+                        # Ensure coordinates are integers for drawing
+                        text_bg_x1, text_bg_y1, text_bg_x2, text_bg_y2 = map(int, [text_bg_x1, text_bg_y1, text_bg_x2, text_bg_y2])
+
+                        # Draw background rectangle (e.g., white)
+                        cv2.rectangle(marked_image, (text_bg_x1, text_bg_y1), (text_bg_x2, text_bg_y2), (255, 255, 255), cv2.FILLED)
+                        
+                        # Calculate text position (centered on the background)
+                        text_x = x1 + 2
+                        text_y = y1 - baseline - 2 # Position text on the background
+                        # Ensure coordinates are integers
+                        text_x, text_y = map(int, [text_x, text_y])
+
+                        # Draw the ASCII text using standard cv2.putText
+                        cv2.putText(marked_image, ascii_text, (text_x, text_y), font_face, font_scale, color, text_thickness, cv2.LINE_AA)
+                    except Exception as e:
+                        self.logger.error(f"Error drawing text '{ascii_text}' for box {box}: {e}")
+            # else: Coordinates were not extracted, skipping text drawing
+
         return marked_image
 
     def add_record(self, image_path, sign_text, print_text, result_text):
