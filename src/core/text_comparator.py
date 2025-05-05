@@ -7,9 +7,9 @@ CheckCheck 导管喷码自动核对系统 - 文本比对模块
 """
 
 import difflib
-from typing import Dict, List, Tuple
+import re
 import logging
-import re # 导入 re 模块
+from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,7 @@ class TextComparator:
         """
         # 配置参数
         self.similarity_threshold = 0.8  # 相似度阈值，高于此值视为通过
+        self.logger = logging.getLogger(__name__) # Initialize logger instance
         
     def compare_texts(self, text1: str, text2: str) -> Dict:
         """
@@ -50,6 +51,10 @@ class TextComparator:
                 'highlighted_text2': ''
             }
         
+        # 预处理文本
+        text1 = self._preprocess_text(text1)
+        text2 = self._preprocess_text(text2)
+        
         # 计算相似度
         similarity = self._calculate_similarity(text1, text2)
         
@@ -70,39 +75,44 @@ class TextComparator:
             'highlighted_text2': highlighted_text2
         }
     
+    def _preprocess_text(self, text: str) -> str:
+        """Preprocesses text for comparison by removing unwanted characters."""
+        # Keep only alphanumeric characters (A-Z, a-z, 0-9)
+        # This removes spaces, punctuation, Chinese characters, etc.
+        processed_text = re.sub(r'[^a-zA-Z0-9]', '', text)
+        self.logger.debug(f"Preprocessing text: '{text}' -> '{processed_text}'")
+        return processed_text
+    
     def _calculate_similarity(self, text1: str, text2: str) -> float:
         """
-        计算两段文本的相似度 (忽略空格和英文句点)
+        Calculates the similarity between two preprocessed texts.
 
         Args:
-            text1 (str): 第一段文本
-            text2 (str): 第二段文本
+            text1 (str): The first preprocessed text.
+            text2 (str): The second preprocessed text.
 
         Returns:
-            float: 相似度（0-1之间的浮点数）
+            float: Similarity score (0.0 to 1.0).
         """
-        # 过滤文本：只保留字母和数字
-        text1_filtered = re.sub(r'[^a-zA-Z0-9]', '', text1)
-        text2_filtered = re.sub(r'[^a-zA-Z0-9]', '', text2)
+        # Texts are assumed to be preprocessed already by compare_texts
+        # No need to filter here again
 
-        # 添加调试日志
-        logger.debug(f"Comparing filtered texts:")
-        logger.debug(f"  Text1 Filtered: '{text1_filtered}'")
-        logger.debug(f"  Text2 Filtered: '{text2_filtered}'")
+        # Add debug logging for the texts being compared
+        self.logger.debug(f"Comparing preprocessed texts:")
+        self.logger.debug(f"  Text1: '{text1}'")
+        self.logger.debug(f"  Text2: '{text2}'")
 
-        # 处理空字符串或仅包含空格和句点的情况
-        if not text1_filtered and not text2_filtered:
-            return 1.0  # 两者都为空（或只有空格和句点），视为相同
-        if not text1_filtered or not text2_filtered:
-             # 其中一个为空（移除空格和句点后），另一个不为空
-             # 如果要求严格匹配，则返回0.0。如果认为空匹配空，则需要更复杂的逻辑。
-             # 当前场景下，一个有字符一个没字符，相似度应为0。
+        # Handle cases where one or both texts are empty after preprocessing
+        if not text1 and not text2:
+            return 1.0  # Both are empty, considered identical
+        if not text1 or not text2:
+            # One is empty, the other is not. Similarity is 0.
             return 0.0
 
-        # 使用SequenceMatcher计算相似度
-        matcher = difflib.SequenceMatcher(None, text1_filtered, text2_filtered)
-        similarity_ratio = matcher.ratio() # 获取比率
-        logger.debug(f"Similarity Ratio: {similarity_ratio}") # 添加调试日志
+        # Use SequenceMatcher to calculate similarity
+        matcher = difflib.SequenceMatcher(None, text1, text2)
+        similarity_ratio = matcher.ratio()
+        self.logger.debug(f"Similarity Ratio: {similarity_ratio:.4f}")
 
         return similarity_ratio
     
