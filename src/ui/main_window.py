@@ -1154,28 +1154,50 @@ class MainWindow(QMainWindow):
                         text_thickness = 1
                         (text_width, text_height), baseline = cv2.getTextSize(ascii_text, font_face, font_scale, text_thickness)
 
-                        # Calculate position for the text background (using guaranteed x1, y1)
-                        text_bg_x1 = x1
-                        text_bg_y1 = y1 - text_height - baseline - 4 # Position background above the box top
-                        text_bg_x2 = x1 + text_width + 4
-                        text_bg_y2 = y1 # Align bottom of background with box top
+                        # --- Calculate text placement --- 
+                        # Check if there's enough space above the box
+                        required_space_above = text_height + baseline + 4
+                        place_above = (y1 >= required_space_above)
 
-                        # Ensure background is within image bounds (simple check)
-                        text_bg_y1 = max(text_bg_y1, 0)
+                        if place_above:
+                            # Place label above the box
+                            text_bg_y1 = y1 - required_space_above
+                            text_y = y1 - baseline - 2
+                        else:
+                            # Place label inside the box (top-left corner)
+                            text_bg_y1 = y1 + 2
+                            text_y = y1 + text_height + 2
+                            # Ensure text_y is not below the image
+                            text_y = min(text_y, height - baseline - 1) 
+                            text_bg_y1 = max(0, min(text_bg_y1, height - text_height - baseline - 4 -1)) # Clamp bg y1
+
+                        # Calculate horizontal placement (common for both above/below)
+                        text_x = x1 + 2
+                        text_bg_x1 = x1
+                        text_bg_x2 = x1 + text_width + 4
+                        text_bg_y2 = text_bg_y1 + text_height + baseline + 4
+
+                        # --- Clamp coordinates within image boundaries --- 
+                        text_bg_x1 = max(0, min(text_bg_x1, width - 1))
+                        text_bg_y1 = max(0, min(text_bg_y1, height - 1))
+                        text_bg_x2 = max(0, min(text_bg_x2, width - 1))
+                        text_bg_y2 = max(0, min(text_bg_y2, height - 1))
+                        text_x = max(0, min(text_x, width - text_width - 1)) # Ensure text start is within bounds
+                        text_y = max(text_height, min(text_y, height - baseline - 1)) # Ensure text baseline is within bounds
+                    
                         # Ensure coordinates are integers for drawing
                         text_bg_x1, text_bg_y1, text_bg_x2, text_bg_y2 = map(int, [text_bg_x1, text_bg_y1, text_bg_x2, text_bg_y2])
-
-                        # Draw background rectangle (e.g., white)
-                        cv2.rectangle(marked_image, (text_bg_x1, text_bg_y1), (text_bg_x2, text_bg_y2), (255, 255, 255), cv2.FILLED)
-                        
-                        # Calculate text position (centered on the background)
-                        text_x = x1 + 2
-                        text_y = y1 - baseline - 2 # Position text on the background
-                        # Ensure coordinates are integers
                         text_x, text_y = map(int, [text_x, text_y])
 
-                        # Draw the ASCII text using standard cv2.putText
-                        cv2.putText(marked_image, ascii_text, (text_x, text_y), font_face, font_scale, color, text_thickness, cv2.LINE_AA)
+                        # --- Draw background and text --- 
+                        # Draw background rectangle if coordinates are valid
+                        if text_bg_x2 > text_bg_x1 and text_bg_y2 > text_bg_y1:
+                            cv2.rectangle(marked_image, (text_bg_x1, text_bg_y1), (text_bg_x2, text_bg_y2), (255, 255, 255), cv2.FILLED)
+                            # Draw the ASCII text using standard cv2.putText
+                            cv2.putText(marked_image, ascii_text, (text_x, text_y), font_face, font_scale, color, text_thickness, cv2.LINE_AA)
+                        else:
+                             self.logger.warning(f"Skipping drawing text background/text for '{ascii_text}' due to invalid coordinates after clamping.")
+
                     except Exception as e:
                         self.logger.error(f"Error drawing text '{ascii_text}' for box {box}: {e}")
             # else: Coordinates were not extracted, skipping text drawing
