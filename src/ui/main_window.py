@@ -139,6 +139,15 @@ class MainWindow(QMainWindow):
         self.selected_camera_index = 1 # Default/selected camera index
         self.current_mode = "相机识别" # Default mode
 
+        # 最近一次识别到的架次号/图号
+        self.detected_head_code = None
+        self.detected_main_code = None
+
+        # 编译正则：架次号与图号
+        self.HEAD_REGEX = re.compile(r'^[A-Z]{1,3}\d{2,4}$')
+        self.MAIN_STRICT = re.compile(r'^[A-Z]{3,8}\.\d{3,8}\.[A-Z]\.\d{3,8}$')
+        self.MAIN_FALLBACK = re.compile(r'^[A-Z0-9]+(\.[A-Z0-9]+){2,4}$')
+
         # 定义颜色常量
         self.pass_background_color = "#e0ffe0" # Light green for pass
         self.fail_background_color = "#ffcccc" # Light red for fail
@@ -246,6 +255,13 @@ class MainWindow(QMainWindow):
         self.recognize_button.clicked.connect(self._recognize_current_frame)
         self.recognize_button.setEnabled(False) # Initially disabled
         button_layout.addWidget(self.recognize_button)
+
+        # 新增：复制架次号按钮
+        self.copy_head_button = QPushButton(" 复制架次号")
+        self.copy_head_button.setToolTip("复制最近一次识别到的架次号")
+        self.copy_head_button.setEnabled(False)
+        self.copy_head_button.clicked.connect(self.copy_head_to_clipboard)
+        button_layout.addWidget(self.copy_head_button)
 
         # --- Resume Camera Button (Re-added) ---
         self.resume_camera_button = QPushButton(resume_icon, " 恢复相机")
@@ -808,57 +824,42 @@ class MainWindow(QMainWindow):
                         pass  # 如果没有连接的信号，忽略错误
                     self.switch_mode_button.clicked.connect(self.resume_camera)
             
-            # --- 处理识别结果 --- 
-            all_texts = [line[1][0] for line in results[0]] if results and results[0] else [] 
-            label_text = "未识别" # 默认值
-            print_text = "未识别" # 默认值
-            if all_texts:
-                 # 简单示例：将第一行分配给标牌文字，其余分配给喷码文字
-                 label_text = all_texts[0]
-                 print_text = " ".join(all_texts[1:]) if len(all_texts) > 1 else "(无)" 
-            
-            # --- 比较逻辑 --- 
-            if label_text != "未识别" and print_text != "未识别":
-                # 计算相似度
-                comparison_details = self.text_comparator.compare_texts(label_text, print_text)
-                similarity = comparison_details['similarity'] # 从字典中提取相似度
-                similarity_percent = int(similarity * 100)
-                
-                # 判断是否通过 (100%相似度才通过)
-                if similarity_percent == 100:
-                    comparison = f"<span style='color:green; font-weight:bold;'>✓ 通过</span> (相似度: {similarity_percent}%)"
-                    background_color = self.pass_background_color
-                    # Play pass sound
-                    if self.pass_sound.source().isValid():
-                        self.pass_sound.play()
-                    else:
-                        logger.warning("Pass sound not loaded or invalid, cannot play.")
-                else:
-                    comparison = f"<span style='color:red; font-weight:bold;'>✗ 不通过</span> (相似度: {similarity_percent}%)"
-                    background_color = self.fail_background_color
-                    # Play fail sound
-                    if self.fail_sound.source().isValid():
-                        self.fail_sound.play()
-                    else:
-                        logger.warning("Fail sound not loaded or invalid, cannot play.")
-            else:
-                comparison = "<span style='color:orange; font-weight:bold;'>? 无法比对</span>"
-                background_color = self.fail_background_color
-            # --------------------------------------------
+            # --- 选择图号/架次号并复制 ---
+            main_code, head_code, main_box = self._extract_codes(text_with_positions)
+            self.detected_main_code = main_code
+            self.detected_head_code = head_code
 
-            self.label_text_result.setText(f"标牌文字: {label_text}")
-            self.print_text_result.setText(f"喷码文字: {print_text}")
-            self.comparison_result.setText(f"比对结果: {comparison}")
-            self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=background_color))
-            
-            # 添加记录到数据库
-            if label_text != "未识别" and print_text != "未识别":
-                try:
-                    # 使用原始上传的图像路径保存记录
-                    self.add_record(self.image_path, label_text, print_text, comparison)
-                    logger.info(f"Recognition record saved to database for: {self.image_path}")
-                except Exception as e:
-                    logger.error(f"Failed to save record: {e}", exc_info=True)
+            # 高亮图号框（若有）
+            if main_box is not None:
+                marked_image = self._draw_text_boxes(self.cv_image.copy(), [(main_box, main_code or "", 1.0, 0)])
+                h, w, ch = marked_image.shape
+                bytes_per_line = ch * w
+                qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+                pixmap = QPixmap.fromImage(qt_image)
+                pixmap = self._resize_pixmap(pixmap)
+                self.image_label.setPixmap(pixmap)
+
+            # 更新显示与复制
+            self.label_text_result.setText(f"图号: {main_code or '<未检测到>'}")
+            self.print_text_result.setText(f"架次号: {head_code or '<未检测到>'}")
+            if main_code:
+                QApplication.clipboard().setText(main_code)
+                self.comparison_result.setText("状态: 已自动复制图号到剪贴板")
+                # 播放成功音效
+                if self.pass_sound.source().isValid():
+                    self.pass_sound.play()
+            else:
+                self.comparison_result.setText("状态: 未检测到图号，未复制")
+
+            # 复制架次号按钮状态
+            self.copy_head_button.setEnabled(bool(head_code))
+
+            # 保存记录（仅保存图号，可选）
+            try:
+                if main_code:
+                    self.add_record(self.image_path, main_code, "", "copied")
+            except Exception as e:
+                logger.error(f"Failed to save simplified record: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Error during static image recognition: {e}", exc_info=True)
@@ -954,57 +955,45 @@ class MainWindow(QMainWindow):
             else:
                 print_text = " ".join(print_texts)
             
-            # 比对文本相似度
-            if label_text != "<未识别到标牌文字>" and print_text != "<未识别到喷码文字>":
-                # 计算相似度 (使用 TextComparator)
-                comparison_details = self.text_comparator.compare_texts(label_text, print_text)
-                similarity = comparison_details['similarity'] # 从字典中提取相似度
-                similarity_percent = int(similarity * 100)
-                
-                # 判断是否通过 (100%相似度才通过)
-                if similarity_percent == 100:
-                    result_text = f"<span style='color:green; font-weight:bold;'>✓ 通过</span> (相似度: {similarity_percent}%)"
-                    background_color = self.pass_background_color
-                    # Play pass sound
-                    if self.pass_sound.source().isValid():
-                        self.pass_sound.play()
-                    else:
-                        logger.warning("Pass sound not loaded or invalid, cannot play.")
-                else:
-                    result_text = f"<span style='color:red; font-weight:bold;'>✗ 不通过</span> (相似度: {similarity_percent}%)"
-                    background_color = self.fail_background_color
-                    # Play fail sound
-                    if self.fail_sound.source().isValid():
-                        self.fail_sound.play()
-                    else:
-                        logger.warning("Fail sound not loaded or invalid, cannot play.")
+            # 直接解析为图号/架次号
+            main_code, head_code, main_box = self._extract_codes(text_with_positions)
+            self.detected_main_code = main_code
+            self.detected_head_code = head_code
+
+            # 高亮图号框
+            if main_box is not None:
+                marked_image = self._draw_text_boxes(self.cv_image.copy(), [(main_box, main_code or "", 1.0, 0)])
+                h, w, ch = marked_image.shape
+                bytes_per_line = ch * w
+                qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+                pixmap = QPixmap.fromImage(qt_image)
+                pixmap = self._resize_pixmap(pixmap)
+                self.image_label.setPixmap(pixmap)
+
+            # 更新UI显示与复制
+            self.label_text_result.setText(f"图号: {main_code or '<未检测到>'}")
+            self.print_text_result.setText(f"架次号: {head_code or '<未检测到>'}")
+            if main_code:
+                QApplication.clipboard().setText(main_code)
+                self.comparison_result.setText("状态: 已自动复制图号到剪贴板")
+                if self.pass_sound.source().isValid():
+                    self.pass_sound.play()
             else:
-                result_text = "<span style='color:orange; font-weight:bold;'>? 无法比对</span>"
-                background_color = self.fail_background_color
-            
-            # 更新UI显示
-            self.label_text_result.setText(f"标牌文字: {label_text}")
-            self.print_text_result.setText(f"喷码文字: {print_text}")
-            self.comparison_result.setText(f"比对结果: {result_text}")
-            self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=background_color))
-            
-            logger.info("Camera frame recognition complete.")
-            
-            # 保存记录到数据库 (可选)
-            if label_text != "<未识别到标牌文字>" and print_text != "<未识别到喷码文字>":
-                try:
-                    # 保存当前帧
+                self.comparison_result.setText("状态: 未检测到图号，未复制")
+
+            self.copy_head_button.setEnabled(bool(head_code))
+
+            # 保存记录到数据库（仅保存图号）
+            try:
+                if main_code:
                     from datetime import datetime
                     capture_dir = self._ensure_capture_dir()
                     filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                     save_path = os.path.join(capture_dir, filename)
                     cv2.imwrite(save_path, self.cv_image)
-                    
-                    # 保存记录
-                    self.add_record(save_path, label_text, print_text, result_text)
-                    logger.info(f"Camera frame recognition record saved to: {save_path}")
-                except Exception as e:
-                    logger.error(f"Failed to save camera record: {e}", exc_info=True)
+                    self.add_record(save_path, main_code, "", "copied")
+            except Exception as e:
+                logger.error(f"Failed to save simplified camera record: {e}", exc_info=True)
 
         except Exception as e:
              logger.error(f"Error during camera frame recognition: {e}", exc_info=True)
@@ -1203,6 +1192,57 @@ class MainWindow(QMainWindow):
             # else: Coordinates were not extracted, skipping text drawing
 
         return marked_image
+
+    def _normalize_and_validate(self, s: str) -> str:
+        # 仅允许大写/数字/英文点，删除空格；去除尾点
+        if s is None:
+            return ""
+        s = s.strip().replace(' ', '').upper()
+        if s.endswith('.'):
+            s = s[:-1]
+        # 验证字符集合
+        for ch in s:
+            if not (ch.isupper() or ch.isdigit() or ch == '.'):
+                return ""  # 非法行
+        return s
+
+    def _extract_codes(self, text_with_positions):
+        """从OCR行中提取图号与架次号。
+        Returns: (main_code, head_code, main_box)
+        """
+        main_candidates = []  # (score, text, box)
+        head_candidate = None
+        for item in text_with_positions or []:
+            box, text, confidence, _cy = item
+            norm = self._normalize_and_validate(text)
+            if not norm:
+                continue
+            # 架次号
+            if self.HEAD_REGEX.fullmatch(norm) and head_candidate is None:
+                head_candidate = norm
+            # 图号评分
+            score = 0.0
+            if self.MAIN_STRICT.fullmatch(norm):
+                score = 2.0
+            elif self.MAIN_FALLBACK.fullmatch(norm):
+                score = 1.5
+            if score > 0:
+                # 融合置信度
+                score += 0.5 * float(confidence or 0)
+                main_candidates.append((score, norm, box))
+        if main_candidates:
+            main_candidates.sort(key=lambda x: x[0], reverse=True)
+            best = main_candidates[0]
+            return best[1], head_candidate, best[2]
+        return None, head_candidate, None
+
+    def copy_head_to_clipboard(self):
+        """复制最近一次识别到的架次号到剪贴板。"""
+        if self.detected_head_code:
+            QApplication.clipboard().setText(self.detected_head_code)
+            self.statusBar().showMessage(f"架次号已复制: {self.detected_head_code}", 3000)
+        else:
+            self.statusBar().showMessage("当前无可复制的架次号", 3000)
 
     def add_record(self, image_path, sign_text, print_text, result_text):
         """将识别结果保存到数据库"""

@@ -25,13 +25,34 @@ class OCREngine:
         Args:
             use_gpu (bool): 是否使用GPU加速，默认为False
         """
-        # 初始化PaddleOCR
-        self.ocr = PaddleOCR(
-            use_angle_cls=True,  # 使用方向分类器
-            lang="ch",  # 中文模型
-            use_gpu=use_gpu,  # 是否使用GPU
-            show_log=False  # 不显示日志
-        )
+        # 初始化PaddleOCR - 使用相对路径
+        import os
+        current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        rec_model_path = os.path.join(current_dir, "ch_PP-OCRv4_rec_infer")
+        
+        # 检查模型目录是否存在
+        if not os.path.exists(rec_model_path):
+            print(f"Warning: Recognition model directory not found: {rec_model_path}")
+            print("Falling back to default PaddleOCR model...")
+            # 使用默认模型
+            self.ocr = PaddleOCR(
+                use_angle_cls=True,  # 使用方向分类器
+                lang="ch",  # 中文模型
+                use_gpu=use_gpu,  # 是否使用GPU
+                show_log=True  # 开启日志
+            )
+            print("OCREngine initialized with default Chinese model")
+        else:
+            # 使用自定义模型，但不指定字典文件（让PaddleOCR使用默认字典）
+            self.ocr = PaddleOCR(
+                use_angle_cls=True,           # 是否使用方向分类器
+                det=False,                    # 在OCREngine中，我们主要处理已裁剪区域，不执行检测
+                rec_model_dir=rec_model_path, # 指定识别模型路径
+                # rec_char_dict_path=rec_dict_path, # 移除字典路径，使用默认字典
+                use_gpu=use_gpu,
+                show_log=True                 # 开启日志，方便调试模型加载
+            )
+            print(f"OCREngine initialized with custom recognition model from: {rec_model_path}")
         
         # 配置参数
         self.confidence_threshold = 0.7  # 置信度阈值

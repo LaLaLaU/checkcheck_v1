@@ -25,12 +25,45 @@ class RegionDetector:
         # rec=False 禁用识别模块
         # use_angle_cls=False 禁用角度分类
         # use_gpu=False 暂时禁用GPU，确保兼容性
+
+        # 使用相对路径初始化检测模型
+        import os
+        current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        det_model_path = os.path.join(current_dir, "ch_PP-OCRv4_det_infer")
+        
         try:
-            self.detector = PaddleOCR(lang='ch', use_angle_cls=False, use_gpu=False, rec=False, show_log=False)
-            print("PaddleOCR detector initialized successfully.")
+            # 检查检测模型目录是否存在
+            if not os.path.exists(det_model_path):
+                print(f"Warning: Detection model directory not found: {det_model_path}")
+                print("Falling back to default PaddleOCR detection model...")
+                # 使用默认检测模型
+                self.detector = PaddleOCR(
+                    lang='ch', 
+                    use_angle_cls=False, 
+                    use_gpu=False, 
+                    rec=False, 
+                    show_log=True
+                )
+                print("PaddleOCR detector initialized with default Chinese model")
+            else:
+                # 使用自定义检测模型
+                self.detector = PaddleOCR(
+                    det_model_dir=det_model_path,  # 使用相对路径的模型
+                    use_angle_cls=False,          # 通常检测模型不需要角度分类
+                    use_gpu=False,                # 根据硬件配置
+                    rec=False,                    # 禁用识别模块
+                    show_log=True                 # 开启日志
+                )
+                print(f"PaddleOCR detector initialized successfully with model from: {det_model_path}")
         except Exception as e:
             print(f"Error initializing PaddleOCR detector: {e}")
-            self.detector = None
+            print("Falling back to default detection model...")
+            try:
+                self.detector = PaddleOCR(lang='ch', use_angle_cls=False, use_gpu=False, rec=False, show_log=True)
+                print("Successfully initialized with default detection model")
+            except Exception as fallback_e:
+                print(f"Failed to initialize fallback detection model: {fallback_e}")
+                self.detector = None
 
         # 可配置参数
         self.min_textbox_area = 500   # 最终文本框的最小面积

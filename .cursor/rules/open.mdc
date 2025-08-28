@@ -1,0 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+1.用中文交流。
+2.优先给我解决方案，在我允许后才可以自动改写代码。
+3.改动完代码需要打开应用测试，应用通过start_with_conda.bat文件打开.
