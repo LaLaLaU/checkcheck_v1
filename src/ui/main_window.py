@@ -222,11 +222,7 @@ class MainWindow(QMainWindow):
         self.copy_head_button.setEnabled(False)
         self.copy_head_button.clicked.connect(self.copy_head_to_clipboard)
 
-        self.label_text_result = QLabel("标牌文字: 等待识别...")
-        self.label_text_result.setFont(font)
-        self.label_text_result.setTextInteractionFlags(Qt.TextSelectableByMouse) # Allow text selection
-        results_layout.addRow(self.label_text_result) # Remove label for single line
-
+        # 先放“架次号”行（上方）
         # 将“喷码文字”替换为“架次号”，并把复制按钮放入同一容器
         row_widget = QWidget()
         row_layout = QHBoxLayout(row_widget)
@@ -241,12 +237,26 @@ class MainWindow(QMainWindow):
         row_layout.addStretch(1)
         results_layout.addRow(row_widget)
 
+        # 再放“图号”行（下方）
+        self.label_text_result = QLabel("图号: 等待识别...")
+        self.label_text_result.setFont(font)
+        self.label_text_result.setTextInteractionFlags(Qt.TextSelectableByMouse) # Allow text selection
+        results_layout.addRow(self.label_text_result)
+
         # 状态容器：用于显示复制结果，并通过背景色辅助提示
         self.comparison_result = QLabel("状态: 等待识别...")
         self.comparison_result.setFont(font)
         self.comparison_result.setTextInteractionFlags(Qt.TextSelectableByMouse) # Allow text selection
         # QLabel 默认是左对齐的，通常不需要显式设置
         results_layout.addRow(self.comparison_result) # 移除标签
+
+        # 状态颜色常量
+        self.status_success_bg = "#e0ffe0"   # 绿色淡色
+        self.status_warning_bg = "#fff4e5"   # 橙色淡色
+        self.status_error_bg   = "#ffecec"   # 红色淡色
+
+        # 初始化状态样式
+        self._set_status("状态: 等待识别...", self.status_warning_bg)
         
         bottom_layout.addWidget(self.results_groupbox) # Add results groupbox to bottom layout
 
@@ -851,12 +861,12 @@ class MainWindow(QMainWindow):
             self.print_text_result.setText(f"架次号: {head_code or '<未检测到>'}")
             if main_code:
                 QApplication.clipboard().setText(main_code)
-                self.comparison_result.setText("状态: 已自动复制图号到剪贴板")
+                self._set_status("状态: 已自动复制图号到剪贴板", self.status_success_bg)
                 # 播放成功音效
                 if self.pass_sound.source().isValid():
                     self.pass_sound.play()
             else:
-                self.comparison_result.setText("状态: 未检测到图号，未复制")
+                self._set_status("状态: 未检测到图号，未复制", self.status_warning_bg)
 
             # 复制架次号按钮状态
             self.copy_head_button.setEnabled(bool(head_code))
@@ -982,11 +992,11 @@ class MainWindow(QMainWindow):
             self.print_text_result.setText(f"架次号: {head_code or '<未检测到>'}")
             if main_code:
                 QApplication.clipboard().setText(main_code)
-                self.comparison_result.setText("状态: 已自动复制图号到剪贴板")
+                self._set_status("状态: 已自动复制图号到剪贴板", self.status_success_bg)
                 if self.pass_sound.source().isValid():
                     self.pass_sound.play()
             else:
-                self.comparison_result.setText("状态: 未检测到图号，未复制")
+                self._set_status("状态: 未检测到图号，未复制", self.status_warning_bg)
 
             self.copy_head_button.setEnabled(bool(head_code))
 
@@ -1199,6 +1209,15 @@ class MainWindow(QMainWindow):
             # else: Coordinates were not extracted, skipping text drawing
 
         return marked_image
+
+    def _set_status(self, text: str, bg_color: str):
+        try:
+            self.comparison_result.setText(text)
+            self.comparison_result.setStyleSheet(
+                f"QLabel {{ background-color: {bg_color}; border: 1px solid #cccccc; border-radius: 4px; padding: 8px; }}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to set status style: {e}")
 
     def _normalize_and_validate(self, s: str) -> str:
         # 仅允许大写/数字/英文点，删除空格；去除尾点
@@ -1495,6 +1514,15 @@ class MainWindow(QMainWindow):
             self.pass_sound.setSource(QUrl.fromLocalFile(pass_sound_path))
             logger.info(f"Loaded pass sound from: {pass_sound_path}")
         self.pass_sound.setVolume(0.8) # 可选：调整音量
+        # 预热：首次静音播放再停止，避免第一次不响
+        try:
+            orig = self.pass_sound.volume()
+            self.pass_sound.setVolume(0.0)
+            if self.pass_sound.source().isValid():
+                self.pass_sound.play()
+                QTimer.singleShot(120, lambda: (self.pass_sound.stop(), self.pass_sound.setVolume(orig)))
+        except Exception:
+            pass
 
         self.fail_sound = QSoundEffect(self)
         fail_sound_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'assets', 'sounds', 'fail.wav') # Adjust if using .mp3
@@ -1505,3 +1533,12 @@ class MainWindow(QMainWindow):
             self.fail_sound.setSource(QUrl.fromLocalFile(fail_sound_path))
             logger.info(f"Loaded fail sound from: {fail_sound_path}")
         self.fail_sound.setVolume(0.8) # 可选：调整音量
+        # 预热失败音同理
+        try:
+            origf = self.fail_sound.volume()
+            self.fail_sound.setVolume(0.0)
+            if self.fail_sound.source().isValid():
+                self.fail_sound.play()
+                QTimer.singleShot(120, lambda: (self.fail_sound.stop(), self.fail_sound.setVolume(origf)))
+        except Exception:
+            pass
