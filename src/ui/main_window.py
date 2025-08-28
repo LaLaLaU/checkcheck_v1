@@ -47,6 +47,11 @@ class ImageDropLabel(QLabel):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setAlignment(Qt.AlignCenter)
+        # 禁止控件自行拉伸内容，始终按等比例显示
+        try:
+            self.setScaledContents(False)
+        except Exception:
+            pass
         self.setText("请拖拽图片到此处或点击\"上传图像\"按钮")
         self.setFrameShape(QFrame.Box)
         self.setMinimumHeight(400)
@@ -142,6 +147,7 @@ class MainWindow(QMainWindow):
         # 最近一次识别到的架次号/图号
         self.detected_head_code = None
         self.detected_main_code = None
+        self.last_frame_aspect_ratio = None  # 记录相机帧宽高比
 
         # 编译正则：架次号与图号
         self.HEAD_REGEX = re.compile(r'^[A-Z]{1,3}\d{2,4}$')
@@ -187,6 +193,8 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         
         # 创建垂直分割器
         splitter = QSplitter(Qt.Vertical) # Revert to Vertical
@@ -195,22 +203,29 @@ class MainWindow(QMainWindow):
         # 上方区域 - 图像显示
         image_widget = QWidget()
         image_layout = QVBoxLayout(image_widget)
+        image_layout.setContentsMargins(0, 0, 0, 0)
+        image_layout.setSpacing(0)
         self.image_label = ImageDropLabel(self) # Use the custom label
-        self.image_label.fileDropped.connect(self._load_image)
+        # 禁用拖拽上传
+        try:
+            self.image_label.fileDropped.disconnect()
+        except Exception:
+            pass
         image_layout.addWidget(self.image_label)
         splitter.addWidget(image_widget)
         
         # --- Bottom Panel (Controls and Results) - Reverted Structure ---
         bottom_widget = QWidget()
         bottom_layout = QVBoxLayout(bottom_widget)
-        bottom_layout.setContentsMargins(10, 10, 10, 10)
-        bottom_layout.setSpacing(10) # Adjust spacing as needed
+        # 左右适当留白 12px，上下保持紧凑
+        bottom_layout.setContentsMargins(12, 0, 12, 0)
+        bottom_layout.setSpacing(8)
 
         # 结果显示区 (使用 QFormLayout)
         self.results_groupbox = QGroupBox("识别结果")
         results_layout = QFormLayout(self.results_groupbox) 
-        results_layout.setContentsMargins(10, 10, 10, 10) # Add padding inside the groupbox
-        results_layout.setSpacing(10)       # Add spacing between rows
+        results_layout.setContentsMargins(8, 8, 8, 8)
+        results_layout.setSpacing(8)
         results_layout.setLabelAlignment(Qt.AlignRight) # Align labels to the right
 
         font = QFont()
@@ -271,10 +286,10 @@ class MainWindow(QMainWindow):
         settings_icon = self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
         resume_icon = self.style().standardIcon(QStyle.SP_MediaPlay) # Icon for resume button
 
+        # 移除上传图像功能：隐藏按钮且不加入布局
         self.upload_button = QPushButton(upload_icon, " 上传图像")
-        self.upload_button.setToolTip("从本地文件上传图像")
-        self.upload_button.clicked.connect(self.on_upload_image)
-        button_layout.addWidget(self.upload_button)
+        self.upload_button.setVisible(False)
+        self.upload_button.setEnabled(False)
 
         self.recognize_button = QPushButton(recognize_icon, " 开始识别") 
         self.recognize_button.setToolTip("对当前显示的图像或摄像头画面进行识别")
@@ -321,6 +336,7 @@ class MainWindow(QMainWindow):
         
         # 设置分割器初始比例 (approximate from screenshot)
         # Adjust these values as needed
+        splitter.setHandleWidth(0)
         splitter.setSizes([int(self.height() * 0.7), int(self.height() * 0.3)]) 
 
         # 设置结果文本样式
@@ -1041,15 +1057,32 @@ class MainWindow(QMainWindow):
         """
         # 获取标签大小
         label_size = self.image_label.size()
-        
-        # 计算缩放后的图像大小，保持纵横比
-        scaled_pixmap = pixmap.scaled(
-            label_size, 
-            Qt.KeepAspectRatio, 
-            Qt.SmoothTransformation
-        )
-        
+        if label_size.width() <= 0 or label_size.height() <= 0:
+            return pixmap
+        # 不裁剪画面：按容器尺寸等比缩放
+        scaled_pixmap = pixmap.scaled(label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         return scaled_pixmap
+
+    def _fit_image_container_to_aspect(self, aspect_w_over_h: float):
+        """根据帧宽高比，调整图片容器高度使其与画面匹配（不裁剪）。"""
+        try:
+            parent_widget = self.image_label.parent() or self.image_label
+            available_width = max(1, parent_widget.width())
+            target_height = int(available_width / max(0.0001, aspect_w_over_h))
+            target_height = max(200, target_height)
+            if self.image_label.height() != target_height:
+                self.image_label.setMinimumHeight(target_height)
+                self.image_label.setMaximumHeight(target_height)
+        except Exception as e:
+            logger.debug(f"_fit_image_container_to_aspect failed: {e}")
+
+    def resizeEvent(self, event):
+        try:
+            if hasattr(self, 'last_frame_aspect_ratio') and self.last_frame_aspect_ratio:
+                self._fit_image_container_to_aspect(self.last_frame_aspect_ratio)
+        except Exception:
+            pass
+        return super().resizeEvent(event)
 
     def _perform_ocr(self, image_data):
         """Performs OCR using the initialized processor.
@@ -1444,6 +1477,10 @@ class MainWindow(QMainWindow):
         try:
             self.cv_image = frame.copy() # Save frame
             h, w, ch = frame.shape
+            # 恢复之前的容器高度自适应 + _resize_pixmap 统一缩放
+            if h > 0:
+                self.last_frame_aspect_ratio = w / float(h)
+                self._fit_image_container_to_aspect(self.last_frame_aspect_ratio)
             bytes_per_line = ch * w
             qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
             pixmap = QPixmap.fromImage(qt_image)
@@ -1506,15 +1543,15 @@ class MainWindow(QMainWindow):
         """
         self.pass_sound = QSoundEffect(self)
         # 构建相对于项目根目录的路径
-        pass_sound_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'assets', 'sounds', 'pass.wav') # Adjust if using .mp3
+        pass_sound_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'assets', 'sounds', 'pass.wav')
         if not os.path.exists(pass_sound_path):
              logger.warning(f"Pass sound file not found at: {pass_sound_path}")
-             self.pass_sound.setSource(QUrl()) # Set empty source if not found
+             self.pass_sound.setSource(QUrl())
         else:
             self.pass_sound.setSource(QUrl.fromLocalFile(pass_sound_path))
             logger.info(f"Loaded pass sound from: {pass_sound_path}")
-        self.pass_sound.setVolume(0.8) # 可选：调整音量
-        # 预热：首次静音播放再停止，避免第一次不响
+        self.pass_sound.setVolume(0.8)
+        # 恢复预热以避免首次不响
         try:
             orig = self.pass_sound.volume()
             self.pass_sound.setVolume(0.0)
@@ -1525,15 +1562,14 @@ class MainWindow(QMainWindow):
             pass
 
         self.fail_sound = QSoundEffect(self)
-        fail_sound_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'assets', 'sounds', 'fail.wav') # Adjust if using .mp3
+        fail_sound_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'assets', 'sounds', 'fail.wav')
         if not os.path.exists(fail_sound_path):
             logger.warning(f"Fail sound file not found at: {fail_sound_path}")
-            self.fail_sound.setSource(QUrl()) # Set empty source if not found
+            self.fail_sound.setSource(QUrl())
         else:
             self.fail_sound.setSource(QUrl.fromLocalFile(fail_sound_path))
             logger.info(f"Loaded fail sound from: {fail_sound_path}")
-        self.fail_sound.setVolume(0.8) # 可选：调整音量
-        # 预热失败音同理
+        self.fail_sound.setVolume(0.8)
         try:
             origf = self.fail_sound.volume()
             self.fail_sound.setVolume(0.0)
