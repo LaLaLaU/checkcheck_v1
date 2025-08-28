@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
     QApplication, QFormLayout, QStyle, QComboBox, QTableWidgetItem, QTableWidget, QCheckBox, QSizePolicy, QShortcut
 )
 from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader, QPalette, QColor, QKeySequence
-from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, QThread, QTimer, QUrl
+from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, QThread, QTimer, QUrl, QEvent
 from PyQt5.QtMultimedia import QSoundEffect
 from src.core.processor import ImageProcessor
 from src.utils.database_manager import init_db, add_history_record, check_history_exists
@@ -412,6 +412,9 @@ class MainWindow(QMainWindow):
         shortcut_enter = QShortcut(QKeySequence(Qt.Key_Enter), self)
         shortcut_enter.setContext(Qt.ApplicationShortcut)
         shortcut_enter.activated.connect(self._recognize_current_frame)
+
+        # 绑定鼠标中键：在主窗口任意位置按下鼠标中键，触发开始识别
+        self.installEventFilter(self)
 
     def _init_processor(self):
         """
@@ -1640,3 +1643,13 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(120, lambda: (self.fail_sound.stop(), self.fail_sound.setVolume(origf)))
         except Exception:
             pass
+
+    def eventFilter(self, obj, event):
+        # 全局捕获鼠标中键按下
+        try:
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.MiddleButton:
+                self._recognize_current_frame()
+                return True
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
