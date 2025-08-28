@@ -14,9 +14,9 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QLabel, QFileDialog, QMessageBox,
     QSplitter, QFrame, QGroupBox, QProgressDialog,
-    QApplication, QFormLayout, QStyle, QComboBox, QTableWidgetItem, QTableWidget
+    QApplication, QFormLayout, QStyle, QComboBox, QTableWidgetItem, QTableWidget, QCheckBox, QSizePolicy, QShortcut
 )
-from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader, QPalette, QColor
+from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader, QPalette, QColor, QKeySequence
 from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, QThread, QTimer, QUrl
 from PyQt5.QtMultimedia import QSoundEffect
 from src.core.processor import ImageProcessor
@@ -127,6 +127,8 @@ class MainWindow(QMainWindow):
         # 设置窗口属性
         self.setWindowTitle("CheckCheck - 导管喷码自动核对系统")
         self.setMinimumSize(1024, 768)
+        # 默认高度放大50%，使相机与结果区初始显示更大
+        self.resize(1024, 1152)
         
         # 初始化成员变量
         self.image_path = None
@@ -206,6 +208,9 @@ class MainWindow(QMainWindow):
         image_layout.setContentsMargins(0, 0, 0, 0)
         image_layout.setSpacing(0)
         self.image_label = ImageDropLabel(self) # Use the custom label
+        # 不拉伸内容，容器自适应但保持等比显示
+        self.image_label.setScaledContents(False)
+        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         # 禁用拖拽上传
         try:
             self.image_label.fileDropped.disconnect()
@@ -221,12 +226,17 @@ class MainWindow(QMainWindow):
         bottom_layout.setContentsMargins(12, 0, 12, 0)
         bottom_layout.setSpacing(8)
 
-        # 结果显示区 (使用 QFormLayout)
+        # 结果显示区：左侧文字结果 + 右侧识别结果图
         self.results_groupbox = QGroupBox("识别结果")
-        results_layout = QFormLayout(self.results_groupbox) 
-        results_layout.setContentsMargins(8, 8, 8, 8)
+        results_container = QHBoxLayout(self.results_groupbox)
+        results_container.setContentsMargins(8, 8, 8, 8)
+        results_container.setSpacing(8)
+
+        left_widget = QWidget()
+        results_layout = QFormLayout(left_widget) 
+        results_layout.setContentsMargins(0, 0, 0, 0)
         results_layout.setSpacing(8)
-        results_layout.setLabelAlignment(Qt.AlignRight) # Align labels to the right
+        results_layout.setLabelAlignment(Qt.AlignRight)
 
         font = QFont()
         font.setPointSize(12) # Increase font size
@@ -261,9 +271,21 @@ class MainWindow(QMainWindow):
         # 状态容器：用于显示复制结果，并通过背景色辅助提示
         self.comparison_result = QLabel("状态: 等待识别...")
         self.comparison_result.setFont(font)
-        self.comparison_result.setTextInteractionFlags(Qt.TextSelectableByMouse) # Allow text selection
-        # QLabel 默认是左对齐的，通常不需要显式设置
-        results_layout.addRow(self.comparison_result) # 移除标签
+        self.comparison_result.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        results_layout.addRow(self.comparison_result)
+
+        # 左侧加入容器
+        results_container.addWidget(left_widget, 2)
+
+        # 右侧识别结果图
+        self.result_preview_label = QLabel("识别结果图")
+        self.result_preview_label.setAlignment(Qt.AlignCenter)
+        # 放大约50%
+        self.result_preview_label.setMinimumSize(450, 270)
+        self.result_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.result_preview_label.setStyleSheet("border: 1px solid #cccccc; background-color: #ffffff;")
+        # 提高右侧权重，使其更大
+        results_container.addWidget(self.result_preview_label, 4)
 
         # 状态颜色常量
         self.status_success_bg = "#e0ffe0"   # 绿色淡色
@@ -297,14 +319,20 @@ class MainWindow(QMainWindow):
         self.recognize_button.setEnabled(False) # Initially disabled
         button_layout.addWidget(self.recognize_button)
 
+        # 实时识别开关
+        self.realtime_checkbox = QCheckBox(" 实时识别")
+        self.realtime_checkbox.setToolTip("开启后自动识别相机画面，有新标牌时自动输出结果")
+        self.realtime_checkbox.setChecked(False)
+        self.realtime_checkbox.toggled.connect(self.on_toggle_realtime)
+        button_layout.addWidget(self.realtime_checkbox)
+
         # 已移到结果容器
 
         # --- Resume Camera Button (Re-added) ---
+        # 移除“恢复相机”按钮（相机始终实时）
         self.resume_camera_button = QPushButton(resume_icon, " 恢复相机")
-        self.resume_camera_button.setEnabled(False) # Start disabled
-        self.resume_camera_button.setToolTip("恢复实时相机画面显示")
-        self.resume_camera_button.clicked.connect(self.resume_camera) # Connect to method
-        button_layout.addWidget(self.resume_camera_button)
+        self.resume_camera_button.setVisible(False)
+        self.resume_camera_button.setEnabled(False)
         # --- End Resume Camera Button ---
 
         # 移除切换到图片功能：隐藏切换按钮
@@ -337,6 +365,7 @@ class MainWindow(QMainWindow):
         # 设置分割器初始比例 (approximate from screenshot)
         # Adjust these values as needed
         splitter.setHandleWidth(0)
+        # 默认窗口更高后，维持上70%/下30%
         splitter.setSizes([int(self.height() * 0.7), int(self.height() * 0.3)]) 
 
         # 设置结果文本样式
@@ -374,6 +403,15 @@ class MainWindow(QMainWindow):
         
         # Connect the drop signal
         self.image_label.fileDropped.connect(self._load_image)
+
+        # 全局快捷键：Enter 和小键盘 Enter 触发开始识别
+        shortcut_return = QShortcut(QKeySequence(Qt.Key_Return), self)
+        shortcut_return.setContext(Qt.ApplicationShortcut)
+        shortcut_return.activated.connect(self._recognize_current_frame)
+
+        shortcut_enter = QShortcut(QKeySequence(Qt.Key_Enter), self)
+        shortcut_enter.setContext(Qt.ApplicationShortcut)
+        shortcut_enter.activated.connect(self._recognize_current_frame)
 
     def _init_processor(self):
         """
@@ -780,9 +818,7 @@ class MainWindow(QMainWindow):
             return
 
         if self.camera_running and self.cv_image is not None:
-            # 重置暂停状态，确保获取最新的相机画面
-            self.pause_camera_updates = False
-            # 短暂延时，确保获取到最新的画面
+            # 相机始终实时，直接触发一次识别（不暂停）
             QTimer.singleShot(100, self._perform_camera_recognition)
         elif self.current_image:
             # 处理静态图像
@@ -838,24 +874,13 @@ class MainWindow(QMainWindow):
             # 在图像上绘制文本框
             if text_with_positions:
                 marked_image = self._draw_text_boxes(self.cv_image.copy(), text_with_positions)
-                
-                # 将标记后的图像转换为QPixmap并显示
+                # 仅更新右侧预览，不影响相机实时画面
                 h, w, ch = marked_image.shape
                 bytes_per_line = ch * w
                 qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-                pixmap = QPixmap.fromImage(qt_image)
-                pixmap = self._resize_pixmap(pixmap)
-                self.image_label.setPixmap(pixmap)
-                
-                # 如果相机已经启动，则启用恢复相机按钮
-                if self.camera_running:
-                    self.pause_camera_updates = True
-                    self.switch_mode_button.setText(" 恢复相机")
-                    try:
-                        self.switch_mode_button.clicked.disconnect()
-                    except TypeError:
-                        pass  # 如果没有连接的信号，忽略错误
-                    self.switch_mode_button.clicked.connect(self.resume_camera)
+                pixmap_marked = QPixmap.fromImage(qt_image)
+                preview = pixmap_marked.scaled(self.result_preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.result_preview_label.setPixmap(preview)
             
             # --- 选择图号/架次号并复制 ---
             main_code, head_code, main_box = self._extract_codes(text_with_positions)
@@ -944,20 +969,27 @@ class MainWindow(QMainWindow):
             # 在图像上绘制文本框
             marked_image = self._draw_text_boxes(self.cv_image.copy(), text_with_positions)
             
-            # 将标记后的图像转换为QPixmap并显示
+            # 将标记后的图像转换为QPixmap
             h, w, ch = marked_image.shape
             bytes_per_line = ch * w
             qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-            pixmap = QPixmap.fromImage(qt_image)
-            pixmap = self._resize_pixmap(pixmap)
-            self.image_label.setPixmap(pixmap) # Display frame
+            pixmap_marked = QPixmap.fromImage(qt_image)
+            # 右侧预览显示标记图，不改变左侧相机画面
+            preview = pixmap_marked.scaled(self.result_preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.result_preview_label.setPixmap(preview)
+            # 保持左侧相机画面显示当前帧（未标记），避免视觉停留
+            if self.cv_image is not None:
+                h2, w2, ch2 = self.cv_image.shape
+                bytes_per_line2 = ch2 * w2
+                qt_image2 = QImage(self.cv_image.data, w2, h2, bytes_per_line2, QImage.Format_RGB888).rgbSwapped()
+                pixmap_frame = QPixmap.fromImage(qt_image2)
+                pixmap_frame = self._resize_pixmap(pixmap_frame)
+                self.image_label.setPixmap(pixmap_frame)
             self.current_image = None # Ensure static image is cleared
 
-            # 暂停相机画面更新，保持显示标记后的画面
-            self.pause_camera_updates = True
-            self.resume_camera_button.setEnabled(True) # Enable the resume button
-            # Disable recognize button while paused
-            self.recognize_button.setEnabled(False)
+            # 相机永远实时：根据复选框决定是否自动轮询识别，但不暂停画面
+            if self.realtime_checkbox.isChecked():
+                QTimer.singleShot(800, self._maybe_realtime_recognize)
             
             # 按y坐标排序，区分上下文本
             text_with_positions.sort(key=lambda x: x[3])
@@ -999,9 +1031,9 @@ class MainWindow(QMainWindow):
                 h, w, ch = marked_image.shape
                 bytes_per_line = ch * w
                 qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-                pixmap = QPixmap.fromImage(qt_image)
-                pixmap = self._resize_pixmap(pixmap)
-                self.image_label.setPixmap(pixmap)
+                pixmap_marked = QPixmap.fromImage(qt_image)
+                preview = pixmap_marked.scaled(self.result_preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.result_preview_label.setPixmap(preview)
 
             # 更新UI显示与复制
             self.label_text_result.setText(f"图号: {main_code or '<未检测到>'}")
@@ -1045,6 +1077,21 @@ class MainWindow(QMainWindow):
                   self.recognize_button.setText(" 开始识别")
              # Resume button state is handled when pausing/resuming
 
+    def _maybe_realtime_recognize(self):
+        # 若处于实时识别且相机运行，则再触发一次识别（不检查暂停状态）
+        if self.realtime_checkbox.isChecked() and self.camera_running:
+            self._perform_camera_recognition()
+
+    def on_toggle_realtime(self, checked: bool):
+        # 切换实时识别：如果开启且相机运行，立即启动一次识别循环
+        if checked:
+            # 开启实时识别：开始自动识别（相机本就实时）
+            if self.camera_running:
+                QTimer.singleShot(200, self._maybe_realtime_recognize)
+        else:
+            # 关闭实时识别，不做额外动作
+            pass
+
     def _resize_pixmap(self, pixmap):
         """
         调整图像大小以适应标签
@@ -1055,21 +1102,36 @@ class MainWindow(QMainWindow):
         Returns:
             QPixmap: 调整大小后的图像
         """
-        # 获取标签大小
-        label_size = self.image_label.size()
+        # 获取标签可用内容区大小（扣除边框等），防止被布局压缩时误判
+        label_size = self.image_label.contentsRect().size()
         if label_size.width() <= 0 or label_size.height() <= 0:
-            return pixmap
-        # 不裁剪画面：按容器尺寸等比缩放
-        scaled_pixmap = pixmap.scaled(label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        return scaled_pixmap
+            label_size = self.image_label.size()
+        # 不裁剪画面：等比缩放，完整显示，并考虑屏幕缩放(DPI)
+        try:
+            dpr = float(self.devicePixelRatioF()) if hasattr(self, 'devicePixelRatioF') else 1.0
+        except Exception:
+            dpr = 1.0
+        target_w = max(1, int(label_size.width() * dpr))
+        target_h = max(1, int(label_size.height() * dpr))
+        scaled = pixmap.scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        try:
+            scaled.setDevicePixelRatio(dpr)
+        except Exception:
+            pass
+        return scaled
 
     def _fit_image_container_to_aspect(self, aspect_w_over_h: float):
         """根据帧宽高比，调整图片容器高度使其与画面匹配（不裁剪）。"""
         try:
             parent_widget = self.image_label.parent() or self.image_label
             available_width = max(1, parent_widget.width())
-            target_height = int(available_width / max(0.0001, aspect_w_over_h))
-            target_height = max(200, target_height)
+            available_height = max(1, parent_widget.height())
+            # 先按宽度算出理想高度
+            ideal_height = int(available_width / max(0.0001, aspect_w_over_h))
+            # 最终高度受父容器高度上限约束，避免超出导致下方看起来被“裁切”
+            target_height = min(ideal_height, available_height)
+            # 设一个较小的下限，避免过矮
+            target_height = max(240, target_height)
             if self.image_label.height() != target_height:
                 self.image_label.setMinimumHeight(target_height)
                 self.image_label.setMaximumHeight(target_height)
@@ -1471,7 +1533,7 @@ class MainWindow(QMainWindow):
 
     def update_frame(self, frame: np.ndarray):
         """接收摄像头帧并更新UI"""
-        if not self.camera_running or self.pause_camera_updates:
+        if not self.camera_running:
             return
             
         try:
