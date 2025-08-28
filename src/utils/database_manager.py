@@ -88,6 +88,25 @@ def get_all_history():
     conn.close()
     return rows
 
+# 批量删除历史记录（根据联合键近似匹配）
+def delete_history_records(keys):
+    """Delete records by (timestamp, image_path, sign_text, print_text) approximate keys.
+    keys: list of tuples (timestamp, image_path, sign_text, print_text)
+    """
+    if not keys:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        for ts, img, sign, print_ in keys:
+            cursor.execute(
+                "DELETE FROM history WHERE timestamp=? AND image_path=? AND sign_text=? AND print_text=?",
+                (ts, img, sign, print_)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
 # --- Check for Existence --- 
 def check_history_exists(sign_text: str, print_text: str, similarity: float, result: str) -> bool:
     """Checks if a record with the exact same content already exists."""

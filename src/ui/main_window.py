@@ -216,17 +216,33 @@ class MainWindow(QMainWindow):
         font = QFont()
         font.setPointSize(12) # Increase font size
 
+        # 复制架次号按钮：提前创建，供结果容器使用
+        self.copy_head_button = QPushButton(" 复制架次号")
+        self.copy_head_button.setToolTip("复制最近一次识别到的架次号")
+        self.copy_head_button.setEnabled(False)
+        self.copy_head_button.clicked.connect(self.copy_head_to_clipboard)
+
         self.label_text_result = QLabel("标牌文字: 等待识别...")
         self.label_text_result.setFont(font)
         self.label_text_result.setTextInteractionFlags(Qt.TextSelectableByMouse) # Allow text selection
         results_layout.addRow(self.label_text_result) # Remove label for single line
 
-        self.print_text_result = QLabel("喷码文字: 等待识别...")
+        # 将“喷码文字”替换为“架次号”，并把复制按钮放入同一容器
+        row_widget = QWidget()
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+
+        self.print_text_result = QLabel("架次号: 等待识别...")
         self.print_text_result.setFont(font)
         self.print_text_result.setTextInteractionFlags(Qt.TextSelectableByMouse) # Allow text selection
-        results_layout.addRow(self.print_text_result) # Remove label for single line
+        row_layout.addWidget(self.print_text_result)
+        row_layout.addWidget(self.copy_head_button)
+        row_layout.addStretch(1)
+        results_layout.addRow(row_widget)
 
-        self.comparison_result = QLabel("比对结果: 等待比对...")
+        # 状态容器：用于显示复制结果，并通过背景色辅助提示
+        self.comparison_result = QLabel("状态: 等待识别...")
         self.comparison_result.setFont(font)
         self.comparison_result.setTextInteractionFlags(Qt.TextSelectableByMouse) # Allow text selection
         # QLabel 默认是左对齐的，通常不需要显式设置
@@ -256,12 +272,7 @@ class MainWindow(QMainWindow):
         self.recognize_button.setEnabled(False) # Initially disabled
         button_layout.addWidget(self.recognize_button)
 
-        # 新增：复制架次号按钮
-        self.copy_head_button = QPushButton(" 复制架次号")
-        self.copy_head_button.setToolTip("复制最近一次识别到的架次号")
-        self.copy_head_button.setEnabled(False)
-        self.copy_head_button.clicked.connect(self.copy_head_to_clipboard)
-        button_layout.addWidget(self.copy_head_button)
+        # 已移到结果容器
 
         # --- Resume Camera Button (Re-added) ---
         self.resume_camera_button = QPushButton(resume_icon, " 恢复相机")
@@ -271,21 +282,17 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(self.resume_camera_button)
         # --- End Resume Camera Button ---
 
-        self.switch_mode_button = QPushButton(" 切换到相机")
-        self.switch_mode_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-        self.switch_mode_button.setToolTip("切换到相机识别模式")
-        self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
-        button_layout.addWidget(self.switch_mode_button)
+        # 移除切换到图片功能：隐藏切换按钮
+        self.switch_mode_button = QPushButton(" 切换模式")
+        self.switch_mode_button.setVisible(False)
+        self.switch_mode_button.setEnabled(False)
 
         self.history_button = QPushButton(history_icon, " 历史记录") # Match screenshot text
         self.history_button.setToolTip("查看历史识别记录")
         self.history_button.clicked.connect(self._show_history_window)
         button_layout.addWidget(self.history_button)
 
-        self.settings_button = QPushButton(settings_icon, " 设置")
-        self.settings_button.setToolTip("应用程序设置")
-        self.settings_button.clicked.connect(self.on_open_settings)
-        button_layout.addWidget(self.settings_button)
+        # 移除设置功能按钮（目前无设置项）
         
         # 添加相机选择下拉框
         self.camera_selection_combo = QComboBox()

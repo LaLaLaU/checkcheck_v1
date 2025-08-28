@@ -3,13 +3,13 @@ import os # Import os for path checking
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QTableWidget, 
     QTableWidgetItem, QHeaderView, QMessageBox, QTextEdit, QLabel,
-    QLineEdit, QComboBox, QHBoxLayout
+    QLineEdit, QComboBox, QHBoxLayout, QPushButton
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap, QFont, QColor, QTextCursor, QTextCharFormat, QTextDocument 
 
 # Import function to get history data
-from src.utils.database_manager import get_all_history
+from src.utils.database_manager import get_all_history, delete_history_records
 from src.core.text_comparator import TextComparator
 
 class HistoryWindow(QDialog):
@@ -41,6 +41,15 @@ class HistoryWindow(QDialog):
 
         self.layout.addLayout(filter_layout) # Add filter layout to main layout
 
+        # 操作区：删除所选记录
+        action_layout = QHBoxLayout()
+        self.delete_button = QPushButton("删除所选记录")
+        self.delete_button.setToolTip("删除选中的历史记录（不可恢复）")
+        self.delete_button.clicked.connect(self._delete_selected_rows)
+        action_layout.addWidget(self.delete_button)
+        action_layout.addStretch(1)
+        self.layout.addLayout(action_layout)
+
         self._setup_ui()
         self._load_history_data() # Load data when the window is initialized
         self._apply_filters() # Apply initial filter state (show all)
@@ -61,6 +70,7 @@ class HistoryWindow(QDialog):
         self.history_table.setSelectionBehavior(QTableWidget.SelectRows) # Select whole rows
         self.history_table.setAlternatingRowColors(True) # Alternate row colors for readability
         self.history_table.verticalHeader().setVisible(False) # Hide row numbers
+        self.history_table.setSelectionMode(QTableWidget.ExtendedSelection)
 
         # Adjust column widths
         header = self.history_table.horizontalHeader()
@@ -134,6 +144,33 @@ class HistoryWindow(QDialog):
             self.history_table.setItem(row_idx, 0, timestamp_item)
             self.history_table.setItem(row_idx, 4, similarity_item)
             self.history_table.setItem(row_idx, 5, result_item)
+
+    def _delete_selected_rows(self):
+        rows = sorted({i.row() for i in self.history_table.selectedIndexes()}, reverse=True)
+        if not rows:
+            QMessageBox.information(self, "提示", "请先选择要删除的记录")
+            return
+        # 收集主键信息：这里没有直接展示 id，所以按时间戳+图片路径+文本联合删除
+        keys = []
+        for r in rows:
+            timestamp = self.history_table.item(r, 0).text() if self.history_table.item(r,0) else ""
+            image_path = self.history_table.item(r, 1).text() if self.history_table.item(r,1) else ""
+            sign_widget = self.history_table.cellWidget(r, 2)
+            print_widget = self.history_table.cellWidget(r, 3)
+            sign_text = sign_widget.toPlainText() if sign_widget else ""
+            print_text = print_widget.toPlainText() if print_widget else ""
+            keys.append((timestamp, image_path, sign_text, print_text))
+
+        confirm = QMessageBox.question(self, "确认删除", f"将删除 {len(rows)} 条记录，操作不可恢复，确定吗？")
+        if confirm != QMessageBox.Yes:
+            return
+        try:
+            delete_history_records(keys)
+            # 从表中移除
+            for r in rows:
+                self.history_table.removeRow(r)
+        except Exception as e:
+            QMessageBox.critical(self, "删除失败", f"删除时出错：{e}")
 
     def _apply_filters(self):
         """Applies search and filter criteria to the history table."""
