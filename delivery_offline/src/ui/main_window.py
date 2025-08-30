@@ -1,0 +1,1744 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+CheckCheck 导管喷码自动核对系统 - 主窗口
+
+此模块实现应用程序的主窗口，包括UI布局和基本功能。
+"""
+
+import os
+import sys
+import cv2
+import numpy as np
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QPushButton, QLabel, QFileDialog, QMessageBox,
+    QSplitter, QFrame, QGroupBox, QProgressDialog,
+    QApplication, QFormLayout, QStyle, QComboBox, QTableWidgetItem, QTableWidget, QCheckBox, QSizePolicy, QShortcut
+)
+from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader, QPalette, QColor, QKeySequence
+from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, QThread, QTimer, QUrl, QEvent
+from PyQt5.QtMultimedia import QSoundEffect
+from src.core.processor import ImageProcessor
+from src.utils.database_manager import init_db, add_history_record, check_history_exists
+from src.ui.history_window import HistoryWindow
+from src.workers.camera_worker import CameraWorker
+from src.utils.camera_utils import detect_available_cameras
+from src.core.text_comparator import TextComparator # 导入 TextComparator
+import logging
+import re # Added for preprocessing
+
+# Attempt to import the OCR processor
+try:
+    from src.processing.ocr_processor import PaddleOcrProcessor # Adjust path if needed
+except ImportError as e:
+    logging.error(f"Could not import PaddleOcrProcessor: {e}. OCR functionality will be disabled.")
+    PaddleOcrProcessor = None # Set to None if import fails
+
+logger = logging.getLogger(__name__)
+
+# --- Custom Widget for Drag and Drop --- 
+
+class ImageDropLabel(QLabel):
+    """A QLabel subclass that accepts image file drops."""
+    fileDropped = pyqtSignal(str) # Signal emitted when a valid image file is dropped
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setAlignment(Qt.AlignCenter)
+        # 禁止控件自行拉伸内容，始终按等比例显示
+        try:
+            self.setScaledContents(False)
+        except Exception:
+            pass
+        self.setText("请拖拽图片到此处或点击\"上传图像\"按钮")
+        self.setFrameShape(QFrame.Box)
+        self.setMinimumHeight(400)
+        self.setStyleSheet("background-color: #f0f0f0; color: gray;")
+        self.setObjectName("image_label") # Keep object name
+
+    def dragEnterEvent(self, event):
+        """Handles drag entering the widget."""
+        mime_data = event.mimeData()
+        if mime_data.hasUrls() and all(url.isLocalFile() for url in mime_data.urls()):
+            # Check if any dropped file is a supported image format
+            supported_formats = [fmt.data().decode().lower() for fmt in QImageReader.supportedImageFormats()]
+            for url in mime_data.urls():
+                file_ext = os.path.splitext(url.toLocalFile())[1].lower().lstrip('.')
+                if file_ext in supported_formats:
+                    event.acceptProposedAction()
+                    self.setStyleSheet("background-color: #e0e0e0; border: 2px dashed #aaaaaa; color: black;") # Indicate droppable
+                    return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        """Handles drag moving over the widget."""
+        mime_data = event.mimeData()
+        if mime_data.hasUrls() and all(url.isLocalFile() for url in mime_data.urls()):
+             # Check if any dropped file is a supported image format (optional, but good practice)
+            supported_formats = [fmt.data().decode().lower() for fmt in QImageReader.supportedImageFormats()]
+            for url in mime_data.urls():
+                file_ext = os.path.splitext(url.toLocalFile())[1].lower().lstrip('.')
+                if file_ext in supported_formats:
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+
+    def dragLeaveEvent(self, event):
+        """Reset background when drag leaves."""
+        self.setStyleSheet("background-color: #f0f0f0; color: gray;") # Reset style
+        event.accept()
+
+    def dropEvent(self, event):
+        """Handles the drop event."""
+        self.setStyleSheet("background-color: #f0f0f0; color: gray;") # Reset style on drop
+        mime_data = event.mimeData()
+        if mime_data.hasUrls():
+            supported_formats = [fmt.data().decode().lower() for fmt in QImageReader.supportedImageFormats()]
+            valid_image_path = None
+            for url in mime_data.urls():
+                file_path = url.toLocalFile()
+                file_ext = os.path.splitext(file_path)[1].lower().lstrip('.')
+                if os.path.isfile(file_path) and file_ext in supported_formats:
+                    valid_image_path = file_path
+                    break # Process the first valid image
+            
+            if valid_image_path:
+                self.fileDropped.emit(valid_image_path) # Emit signal with path
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+        else:
+            event.ignore()
+
+
+class MainWindow(QMainWindow):
+    """
+    应用程序主窗口类
+    """
+    
+    def __init__(self):
+        """
+        初始化主窗口
+        """
+        super().__init__()
+        
+        # 设置窗口属性
+        self.setWindowTitle("CheckCheck - 导管喷码自动核对系统")
+        self.setMinimumSize(1024, 768)
+        # 默认高度放大50%，使相机与结果区初始显示更大
+        self.resize(1024, 1152)
+        
+        # 初始化成员变量
+        self.image_path = None
+        self.current_image = None # QPixmap from loaded file
+        self.cv_image = None      # OpenCV format image (from file or camera)
+        self.processor = None     # 图像处理器
+        self.processing_result = None  # 处理结果
+        self.camera_thread = None      # Thread for camera worker
+        self.camera_worker = None      # Worker for camera capture
+        self.camera_running = False    # Flag for camera state
+        self.camera_index = 1 # TODO: Make configurable
+        self.ocr_processor = None # OCR 处理器
+        self.pause_camera_updates = False
+        self.available_cameras = [] # List to store available camera indices
+        self.selected_camera_index = 1 # Default/selected camera index
+        self.current_mode = "相机识别" # Default mode
+
+        # 最近一次识别到的架次号/图号
+        self.detected_head_code = None
+        self.detected_main_code = None
+        self.last_frame_aspect_ratio = None  # 记录相机帧宽高比
+
+        # 编译正则：架次号与图号
+        self.HEAD_REGEX = re.compile(r'^[A-Z]{1,3}\d{2,4}$')
+        # 图号严格规范：(3|4|5)-4-1-3-3，首段首字符为大写字母
+        self.MAIN_STRICT = re.compile(r'^[A-Z][A-Z0-9]{2,4}\.\d{4}\.[A-Z]\.\d{3}\.\d{3}$')
+        # 宽松匹配：用于候选评分（黄色提示），不作为成功标准
+        self.MAIN_FALLBACK = re.compile(r'^[A-Z0-9]+(\.[A-Z0-9]+){2,4}$')
+
+        # 定义颜色常量
+        self.pass_background_color = "#e0ffe0" # Light green for pass
+        self.fail_background_color = "#ffcccc" # Light red for fail
+        self.default_groupbox_background = "transparent"
+
+        # 初始化数据库
+        from src.utils.database_manager import init_db
+        try:
+            init_db()
+            logger.info("Database initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}", exc_info=True)
+        
+        # 设置UI
+        self._setup_ui()
+        
+        # 初始化图像处理器
+        self._init_processor()
+        # 初始化OCR处理器
+        self._init_ocr_processor()
+        # 初始化相机（但不启动）
+        self._init_camera()
+        # 自动启动摄像头
+        self.start_camera()
+
+        # 实例化 TextComparator
+        self.text_comparator = TextComparator()
+
+        # 初始化音效
+        self._init_sounds()
+
+    def _setup_ui(self):
+        """
+        设置UI布局和组件
+        """
+        # 主窗口和中心控件
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        
+        # 创建垂直分割器
+        splitter = QSplitter(Qt.Vertical) # Revert to Vertical
+        main_layout.addWidget(splitter)
+        
+        # 上方区域 - 图像显示
+        image_widget = QWidget()
+        image_layout = QVBoxLayout(image_widget)
+        image_layout.setContentsMargins(0, 0, 0, 0)
+        image_layout.setSpacing(0)
+        self.image_label = ImageDropLabel(self) # Use the custom label
+        # 不拉伸内容，容器自适应但保持等比显示
+        self.image_label.setScaledContents(False)
+        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # 禁用拖拽上传
+        try:
+            self.image_label.fileDropped.disconnect()
+        except Exception:
+            pass
+        image_layout.addWidget(self.image_label)
+        splitter.addWidget(image_widget)
+        
+        # --- Bottom Panel (Controls and Results) - Reverted Structure ---
+        bottom_widget = QWidget()
+        bottom_layout = QVBoxLayout(bottom_widget)
+        # 左右适当留白 12px，上下保持紧凑
+        bottom_layout.setContentsMargins(12, 0, 12, 0)
+        bottom_layout.setSpacing(8)
+
+        # 结果显示区：左侧文字结果 + 右侧识别结果图
+        self.results_groupbox = QGroupBox("识别结果")
+        results_container = QHBoxLayout(self.results_groupbox)
+        results_container.setContentsMargins(8, 8, 8, 8)
+        results_container.setSpacing(8)
+
+        left_widget = QWidget()
+        results_layout = QFormLayout(left_widget) 
+        results_layout.setContentsMargins(0, 0, 0, 0)
+        results_layout.setSpacing(8)
+        results_layout.setLabelAlignment(Qt.AlignRight)
+
+        font = QFont()
+        font.setPointSize(12) # Increase font size
+
+        # 复制架次号按钮：提前创建，供结果容器使用
+        self.copy_head_button = QPushButton(" 复制架次号")
+        self.copy_head_button.setToolTip("复制最近一次识别到的架次号")
+        self.copy_head_button.setEnabled(False)
+        self.copy_head_button.clicked.connect(self.copy_head_to_clipboard)
+
+        # 先放“架次号”行（上方）
+        # 将“喷码文字”替换为“架次号”，并把复制按钮放入同一容器
+        row_widget = QWidget()
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+
+        self.print_text_result = QLabel("架次号: 等待识别...")
+        self.print_text_result.setFont(font)
+        self.print_text_result.setTextInteractionFlags(Qt.TextSelectableByMouse) # Allow text selection
+        row_layout.addWidget(self.print_text_result)
+        row_layout.addWidget(self.copy_head_button)
+        row_layout.addStretch(1)
+        results_layout.addRow(row_widget)
+
+        # 再放“图号”行（下方）
+        self.label_text_result = QLabel("图号: 等待识别...")
+        self.label_text_result.setFont(font)
+        self.label_text_result.setTextInteractionFlags(Qt.TextSelectableByMouse) # Allow text selection
+        results_layout.addRow(self.label_text_result)
+
+        # 状态容器：用于显示复制结果，并通过背景色辅助提示
+        self.comparison_result = QLabel("状态: 等待识别...")
+        self.comparison_result.setFont(font)
+        self.comparison_result.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        results_layout.addRow(self.comparison_result)
+
+        # 左侧加入容器
+        results_container.addWidget(left_widget, 2)
+
+        # 右侧识别结果图
+        self.result_preview_label = QLabel("识别结果图")
+        self.result_preview_label.setAlignment(Qt.AlignCenter)
+        # 放大约50%
+        self.result_preview_label.setMinimumSize(450, 270)
+        self.result_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.result_preview_label.setStyleSheet("border: 1px solid #cccccc; background-color: #ffffff;")
+        # 提高右侧权重，使其更大
+        results_container.addWidget(self.result_preview_label, 4)
+
+        # 状态颜色常量
+        self.status_success_bg = "#e0ffe0"   # 绿色淡色
+        self.status_warning_bg = "#fff4e5"   # 橙色淡色
+        self.status_error_bg   = "#ffecec"   # 红色淡色
+
+        # 初始化状态样式
+        self._set_status("状态: 等待识别...", self.status_warning_bg)
+        
+        bottom_layout.addWidget(self.results_groupbox) # Add results groupbox to bottom layout
+
+        # 控制按钮区域 (Horizontal Layout)
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
+
+        # 获取标准图标
+        upload_icon = self.style().standardIcon(QStyle.SP_DialogOpenButton)
+        recognize_icon = self.style().standardIcon(QStyle.SP_MediaPlay) 
+        history_icon = self.style().standardIcon(QStyle.SP_FileDialogListView) # Matching screenshot's likely icon
+        settings_icon = self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
+        resume_icon = self.style().standardIcon(QStyle.SP_MediaPlay) # Icon for resume button
+
+        # 移除上传图像功能：隐藏按钮且不加入布局
+        self.upload_button = QPushButton(upload_icon, " 上传图像")
+        self.upload_button.setVisible(False)
+        self.upload_button.setEnabled(False)
+
+        self.recognize_button = QPushButton(recognize_icon, " 开始识别") 
+        self.recognize_button.setToolTip("对当前显示的图像或摄像头画面进行识别")
+        self.recognize_button.clicked.connect(self._recognize_current_frame)
+        self.recognize_button.setEnabled(False) # Initially disabled
+        button_layout.addWidget(self.recognize_button)
+
+        # 实时识别开关
+        self.realtime_checkbox = QCheckBox(" 实时识别")
+        self.realtime_checkbox.setToolTip("开启后自动识别相机画面，有新标牌时自动输出结果")
+        self.realtime_checkbox.setChecked(False)
+        self.realtime_checkbox.toggled.connect(self.on_toggle_realtime)
+        button_layout.addWidget(self.realtime_checkbox)
+
+        # 已移到结果容器
+
+        # --- Resume Camera Button (Re-added) ---
+        # 移除“恢复相机”按钮（相机始终实时）
+        self.resume_camera_button = QPushButton(resume_icon, " 恢复相机")
+        self.resume_camera_button.setVisible(False)
+        self.resume_camera_button.setEnabled(False)
+        # --- End Resume Camera Button ---
+
+        # 移除切换到图片功能：隐藏切换按钮
+        self.switch_mode_button = QPushButton(" 切换模式")
+        self.switch_mode_button.setVisible(False)
+        self.switch_mode_button.setEnabled(False)
+
+        self.history_button = QPushButton(history_icon, " 历史记录") # Match screenshot text
+        self.history_button.setToolTip("查看历史识别记录")
+        self.history_button.clicked.connect(self._show_history_window)
+        button_layout.addWidget(self.history_button)
+
+        # 移除设置功能按钮（目前无设置项）
+        
+        # 添加相机选择下拉框
+        self.camera_selection_combo = QComboBox()
+        self.camera_selection_combo.setToolTip("选择要使用的摄像头")
+        self.camera_selection_combo.setMinimumWidth(100)
+        # Connect signal later in _init_camera if multiple cameras detected
+        button_layout.addWidget(QLabel("相机选择:"))
+        button_layout.addWidget(self.camera_selection_combo)
+        button_layout.addSpacing(20) # Add space after combo box
+        
+        # 将按钮布局添加到下方布局
+        bottom_layout.addLayout(button_layout)
+        
+        # 添加下方控件到分割器
+        splitter.addWidget(bottom_widget)
+        
+        # 设置分割器初始比例 (approximate from screenshot)
+        # Adjust these values as needed
+        splitter.setHandleWidth(0)
+        # 默认窗口更高后，维持上70%/下30%
+        splitter.setSizes([int(self.height() * 0.7), int(self.height() * 0.3)]) 
+
+        # 设置结果文本样式
+        self.result_style = """
+        QLabel {
+            border: 1px solid #cccccc;
+            border-radius: 4px;
+            padding: 8px;
+            background-color: #f8f8f8;
+            margin: 2px;
+            font-size: 12pt;
+        }
+        """
+        
+        # 用于控制结果框背景颜色的基础样式
+        self.base_groupbox_style = "QGroupBox {{ border: 1px solid gray; border-radius: 5px; margin-top: 0.5em; background-color: {background_color}; }} QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 3px 0 3px; }}"
+        
+        # 应用样式
+        self.label_text_result.setStyleSheet(self.result_style)
+        self.print_text_result.setStyleSheet(self.result_style)
+        # comparison_result 的背景由 _set_status 动态控制，不用 result_style 的统一背景
+        self.comparison_result.setStyleSheet("")
+        # 结果区整体不再根据识别结果上色，只保留容器边框与透明背景
+        self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
+        
+        # 应用简单的 QSS 样式 (Keep existing styles)
+        self.setStyleSheet("""
+            QMainWindow { background-color: #ffffff; }
+            QGroupBox { font-size: 12pt; border: 1px solid #cccccc; border-radius: 5px; margin-top: 1.5ex; padding-top: 12px; }
+            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 3px; left: 10px; }
+            QPushButton { padding: 8px 15px; border: 1px solid #cccccc; border-radius: 4px; background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f6f7fa, stop:1 #dadbde); min-width: 80px; font-size: 10pt; }
+            QPushButton:hover { background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #e6e7ea, stop:1 #ced0d4); }
+            QPushButton:pressed { background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #dadbde, stop:1 #f6f7fa); }
+            QPushButton:disabled { background-color: #e0e0e0; color: #a0a0a0; }
+            QLabel#image_label { background-color: #f0f0f0; border: 1px solid #cccccc; }
+        """)
+        
+        # Connect the drop signal
+        self.image_label.fileDropped.connect(self._load_image)
+
+        # 全局快捷键：Enter 和小键盘 Enter 触发开始识别
+        shortcut_return = QShortcut(QKeySequence(Qt.Key_Return), self)
+        shortcut_return.setContext(Qt.ApplicationShortcut)
+        shortcut_return.activated.connect(self._recognize_current_frame)
+
+        shortcut_enter = QShortcut(QKeySequence(Qt.Key_Enter), self)
+        shortcut_enter.setContext(Qt.ApplicationShortcut)
+        shortcut_enter.activated.connect(self._recognize_current_frame)
+
+        # 绑定鼠标中键：在主窗口任意位置按下鼠标中键，触发开始识别
+        self.installEventFilter(self)
+
+    def _init_processor(self):
+        """
+        初始化图像处理器
+        """
+        # 创建进度对话框
+        progress = QProgressDialog("正在初始化OCR引擎...", None, 0, 0, self)
+        progress.setWindowTitle("初始化中")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.show()
+        QApplication.processEvents()
+        
+        # 初始化图像处理器
+        try:
+            self.processor = ImageProcessor(use_gpu=False)
+            progress.close()
+        except Exception as e:
+            progress.close()
+            QMessageBox.critical(self, "错误", f"初始化OCR引擎失败: {str(e)}")
+        
+    def _init_ocr_processor(self):
+        """Initialize the OCR processor."""
+        if PaddleOcrProcessor:
+            try:
+                self.ocr_processor = PaddleOcrProcessor()
+                logger.info("OCR Processor initialized successfully.")
+            except Exception as e:
+                logger.error(f"Failed to initialize OCR Processor: {e}")
+                QMessageBox.critical(self, "初始化错误", f"初始化 OCR 处理器失败: {e}")
+        else:
+             logger.warning("PaddleOcrProcessor not available. OCR functionality disabled.")
+             # Optionally show a warning to the user
+             # QMessageBox.warning(self, "警告", "OCR 模块未找到或加载失败，识别功能将不可用。")
+
+    def _init_camera(self):
+        """
+        Initialize camera settings and detect available cameras.
+        优先检查索引1，如果可用则快速启动，并提供扫描其他摄像头的选项。
+        """
+        logger.info("Initializing camera system (prioritizing index 1)...")
+        self.available_cameras = []
+        self.camera_selection_combo.clear() # Clear previous items
+        scan_option_added = False
+        
+        # 1. 优先检查索引1
+        logger.debug("Checking camera index 1...")
+        try:
+            cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
+            if cap is not None and cap.isOpened():
+                # 索引1可用
+                logger.info("Camera index 1 is available. Setting as default.")
+                self.available_cameras.append(1)
+                self.selected_camera_index = 1
+                # 只添加索引1和扫描选项到下拉框
+                self.camera_selection_combo.blockSignals(True)
+                self.camera_selection_combo.addItem(f"相机 1", 1)
+                self.camera_selection_combo.addItem("扫描其他摄像头", -99)  # 特殊值用于扫描选项
+                self.camera_selection_combo.setCurrentIndex(0)  # 选择相机1
+                self.camera_selection_combo.blockSignals(False)
+                scan_option_added = True
+                cap.release()
+                logger.debug("Released camera index 1 after check.")
+            else:
+                logger.info("Camera index 1 not available or failed to open.")
+                if cap is not None:
+                    cap.release()
+                # 如果索引1不可用，扫描其他摄像头
+                self._scan_other_cameras(update_combo=True, initial_scan=True)
+        except Exception as e:
+            logger.error(f"Error checking camera index 1: {e}", exc_info=True)
+            # 出错时扫描其他摄像头
+            self._scan_other_cameras(update_combo=True, initial_scan=True)
+
+        # 3. 最终UI设置和摄像头启动（如果可用）
+        if self.available_cameras:
+            if self.selected_camera_index != -1:
+                # 确保下拉框选择正确的摄像头
+                if not scan_option_added:  # 只有在执行了_scan_other_cameras时才需要
+                    current_index_in_combo = -1
+                    for i in range(self.camera_selection_combo.count()):
+                        if self.camera_selection_combo.itemData(i) == self.selected_camera_index:
+                            current_index_in_combo = i
+                            break
+                    if current_index_in_combo != -1:
+                        self.camera_selection_combo.setCurrentIndex(current_index_in_combo)
+                    else:
+                        logger.error(f"Selected camera {self.selected_camera_index} not found in combo after scan!")
+            
+            # 在初始填充和选择后连接信号
+            try:  # 先断开连接，避免多次连接
+                self.camera_selection_combo.currentIndexChanged.disconnect(self.on_camera_selection_changed)
+            except TypeError:
+                pass  # 如果未连接则忽略错误
+            self.camera_selection_combo.currentIndexChanged.connect(self.on_camera_selection_changed)
+            self.camera_selection_combo.setEnabled(True)
+            
+            # 启用相关按钮
+            self.recognize_button.setEnabled(True) 
+            self.switch_mode_button.setEnabled(True)
+            self.statusBar().showMessage(f'使用相机 {self.selected_camera_index}')
+        else:
+            # 未检测到摄像头
+            logger.warning("No cameras detected.")
+            self.camera_selection_combo.addItem("未检测到相机")
+            self.camera_selection_combo.setEnabled(False)
+            self.recognize_button.setEnabled(False) 
+            self.switch_mode_button.setEnabled(False)
+            self.statusBar().showMessage('未检测到可用摄像头')
+        
+        logger.info("Camera system initialized.")
+
+    def _scan_other_cameras(self, update_combo=True, initial_scan=False):
+        """扫描其他摄像头（0, 2, 3, 4）并更新可用摄像头列表"""
+        indices_to_check = [0, 2, 3, 4]  # 索引1已在_init_camera中检查
+        newly_found = []
+        
+        logger.info(f"Scanning camera indices: {indices_to_check}")
+        
+        # 使用QProgressDialog提供视觉反馈
+        progress = QProgressDialog("正在扫描摄像头...", "取消", 0, len(indices_to_check), self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(500)  # 只有当扫描时间较长时才显示
+        progress.setValue(0)
+        
+        for i, index in enumerate(indices_to_check):
+            progress.setValue(i)
+            if progress.wasCanceled():
+                logger.warning("Camera scan cancelled by user.")
+                break
+            
+            # 跳过已经找到的摄像头
+            if index in self.available_cameras:
+                continue
+                
+            logger.debug(f"Checking camera index {index}...")
+            try:
+                cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+                if cap is not None and cap.isOpened():
+                    logger.info(f"Camera index {index} found.")
+                    self.available_cameras.append(index)
+                    newly_found.append(index)
+                    cap.release()
+                    logger.debug(f"Released camera index {index} after check.")
+                elif cap is not None:
+                    cap.release()
+            except Exception as e:
+                logger.error(f"Error checking camera index {index}: {e}", exc_info=True)
+            QApplication.processEvents()  # 保持UI响应
+        
+        progress.setValue(len(indices_to_check))
+        progress.close()
+        
+        # 更新可用摄像头列表
+        self.available_cameras.sort()
+        
+        # 如果之前没有选择摄像头，选择第一个可用的
+        if initial_scan and self.available_cameras and self.selected_camera_index == -1:
+            self.selected_camera_index = self.available_cameras[0]
+            logger.info(f"Setting camera index {self.selected_camera_index} as default after scan.")
+        
+        # 更新下拉框
+        if update_combo:
+            self.camera_selection_combo.blockSignals(True)  # 阻止触发处理程序
+            self.camera_selection_combo.clear()
+            
+            if self.available_cameras:
+                for cam_index in self.available_cameras:
+                    self.camera_selection_combo.addItem(f"相机 {cam_index}", cam_index)
+                
+                # 如果不是初始扫描，添加"扫描其他摄像头"选项
+                if not initial_scan:
+                    self.camera_selection_combo.addItem("扫描其他摄像头", -99)
+                
+                # 重新选择当前摄像头
+                if self.selected_camera_index != -1:
+                    current_index_in_combo = -1
+                    for i in range(self.camera_selection_combo.count()):
+                        if self.camera_selection_combo.itemData(i) == self.selected_camera_index:
+                            current_index_in_combo = i
+                            break
+                    if current_index_in_combo != -1:
+                        self.camera_selection_combo.setCurrentIndex(current_index_in_combo)
+                    else:  # 如果选择的摄像头不在列表中，选择第一个
+                        if self.available_cameras:
+                            self.selected_camera_index = self.available_cameras[0]
+                            first_cam_idx = 0  # 第一个项目就是第一个摄像头
+                            self.camera_selection_combo.setCurrentIndex(first_cam_idx)
+                        else:
+                            self.selected_camera_index = -1
+                self.camera_selection_combo.setEnabled(True)
+            else:
+                self.camera_selection_combo.addItem("未检测到相机")
+                self.camera_selection_combo.setEnabled(False)
+                self.selected_camera_index = -1
+            
+            self.camera_selection_combo.blockSignals(False)
+        
+        return newly_found
+
+    def on_camera_selection_changed(self, index):
+        """Handle camera selection change from the dropdown."""
+        if index < 0 or not self.available_cameras: 
+            return 
+        
+        selected_data = self.camera_selection_combo.itemData(index)
+        
+        if selected_data == -99:  # 用户选择了"扫描其他摄像头"
+            logger.info("User requested scan for other cameras.")
+            
+            # 保存当前有效选择
+            previous_selection = self.selected_camera_index
+            
+            # 停止当前摄像头
+            if self.camera_running:
+                self.stop_camera()
+            
+            # 执行扫描并更新下拉框
+            newly_found = self._scan_other_cameras(update_combo=True, initial_scan=False)
+            
+            # 尝试恢复之前的选择，否则选择第一个可用的
+            restored = False
+            if previous_selection != -1 and previous_selection in self.available_cameras:
+                new_combo_index = -1
+                for i in range(self.camera_selection_combo.count()):
+                    if self.camera_selection_combo.itemData(i) == previous_selection:
+                        new_combo_index = i
+                        break
+                if new_combo_index != -1:
+                    self.camera_selection_combo.setCurrentIndex(new_combo_index)  # 这会触发信号
+                    restored = True
+            
+            if not restored and self.available_cameras:
+                first_cam_index = self.available_cameras[0]
+                new_combo_index = -1
+                for i in range(self.camera_selection_combo.count()):
+                    if self.camera_selection_combo.itemData(i) == first_cam_index:
+                        new_combo_index = i
+                        break
+                if new_combo_index != -1:
+                    self.camera_selection_combo.setCurrentIndex(new_combo_index)  # 触发信号
+            elif not self.available_cameras:
+                # 处理扫描未找到摄像头的情况
+                logger.warning("Scan completed, but no cameras available.")
+                self.selected_camera_index = -1
+                self.image_label.setText("扫描后无可用摄像头")
+                self.recognize_button.setEnabled(False)
+            
+            # 注意：启动摄像头由setCurrentIndex触发的信号处理
+        
+        elif isinstance(selected_data, int) and selected_data >= 0:
+            # 用户选择了特定摄像头
+            new_camera_index = selected_data
+            if new_camera_index != self.selected_camera_index or not self.camera_running:
+                logger.info(f"Camera selection changed to index {new_camera_index}. Current state running: {self.camera_running}")
+                self.selected_camera_index = new_camera_index # Update the index first
+                if self.camera_running:
+                    logger.info("Camera is running, stopping it first...")
+                    self.stop_camera()  # Stop the current camera
+                    # Start the new camera after the old one has fully stopped.
+                    # Use a small delay to ensure the stop process completes in the event loop.
+                    QTimer.singleShot(100, self.start_camera)
+                else:
+                    logger.info("Camera is not running, starting the selected camera directly.")
+                    # Camera is already stopped (e.g., after scanning or initial state), start directly
+                    self.start_camera() # Start the new camera immediately
+
+    def on_upload_image(self):
+        """
+        处理上传图像按钮点击事件
+        """
+        # 打开文件对话框
+        file_dialog = QFileDialog()
+        image_path, _ = file_dialog.getOpenFileName(
+            self, "选择图像", "", "图像文件 (*.png *.jpg *.jpeg *.bmp)"
+        )
+        
+        # 如果用户选择了文件
+        if image_path:
+            self._load_image(image_path)
+    
+    def load_image(self, image_path):
+        """
+        加载并显示图像（公共方法，供外部调用）
+        
+        Args:
+            image_path (str): 图像文件路径
+        """
+        self._load_image(image_path)
+
+    def _load_image(self, image_path):
+        """
+        加载并显示图像（内部方法）
+        
+        Args:
+            image_path (str): 图像文件路径
+        """
+        # 保存图像路径
+        self.image_path = image_path
+        
+        # 加载图像
+        pixmap = QPixmap(image_path)
+        if pixmap.isNull():
+            QMessageBox.critical(self, "错误", "无法加载图像文件")
+            return
+        
+        # 保存当前图像
+        self.current_image = pixmap
+        
+        # 加载OpenCV格式的图像
+        self.cv_image = cv2.imread(image_path)
+        
+        # 调整图像大小以适应标签
+        pixmap = self._resize_pixmap(pixmap)
+        
+        # 显示图像
+        self.image_label.setPixmap(pixmap)
+        self.image_label.setAlignment(Qt.AlignCenter)
+        
+        # 启用识别按钮
+        self.recognize_button.setEnabled(True)
+        
+        # 重置结果显示
+        self.clear_recognition_results()
+        
+        # 如果摄像头在运行，停止它
+        if self.camera_running:
+             logger.info("Stopping camera because new image was loaded.")
+             self.stop_camera()
+        
+        # 切换到图片模式
+        self.switch_mode_button.setText(" 切换到相机")
+        try:
+            self.switch_mode_button.clicked.disconnect()
+        except TypeError:
+            pass  # 如果没有连接的信号，忽略错误
+        self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
+
+    def switch_to_camera_mode(self):
+        """切换到相机识别模式"""
+        if self.camera_running: return # Already in camera mode
+        self.clear_recognition_results()
+        # Clear image display and variables
+        self.image_label.clear()
+        self.image_label.setText("正在启动相机...")
+        self.current_image = None
+        self.cv_image = None
+        self.image_path = None 
+        QApplication.processEvents() 
+        self.start_camera() # This will update buttons via update_camera_status
+
+    def switch_to_image_mode(self):
+        """切换到图片识别模式"""
+        if not self.camera_running: return # Already in image mode or camera failed
+        self.pause_camera_updates = False # Ensure pause is reset
+        self.resume_camera_button.setEnabled(False) # Disable resume button
+        self.clear_recognition_results()
+        self.stop_camera() # This updates buttons and resets label
+
+    def resume_camera(self):
+        """恢复相机实时画面"""
+        logger.info("Resuming camera updates.")
+        self.pause_camera_updates = False
+        self.resume_camera_button.setEnabled(False) # Disable itself
+        # Re-enable recognition button if camera is running
+        if self.camera_running:
+            self.recognize_button.setEnabled(True)
+            self.recognize_button.setText(" 开始识别")
+            
+        # Optionally clear results/marked image display?
+        # self.clear_recognition_results() # Maybe confusing?
+        # update_frame will now take over displaying live feed
+        
+        # Ensure mode switch button is correct for camera mode
+        if self.camera_running:
+             self.switch_mode_button.setText(" 切换到图片") # Corrected text
+             # Assuming default icon is camera, set to image icon
+             try: 
+                 icon_path = os.path.join("resources", "icons", "image_mode.png")
+                 if os.path.exists(icon_path):
+                     self.switch_mode_button.setIcon(QIcon(icon_path))
+                 else: # Fallback if icon missing
+                     self.switch_mode_button.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
+             except Exception as e:
+                 logger.warning(f"Could not set image mode icon: {e}")
+                 self.switch_mode_button.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
+             
+             try: self.switch_mode_button.clicked.disconnect()
+             except TypeError: pass
+        self.switch_mode_button.clicked.connect(self.switch_to_image_mode)
+
+    def clear_recognition_results(self):
+        """清空识别结果框"""
+        self.label_text_result.setText("标牌文字: 等待识别...")
+        self.print_text_result.setText("喷码文字: 等待识别...")
+        self._set_status("状态: 等待识别...", self.status_warning_bg)
+        # 结果区整体背景保持透明
+        self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
+        # 清除处理结果
+        self.processing_result = None
+
+    def _recognize_current_frame(self):
+        """Handles the click of the recognize button for both live and static images."""
+        if not self.ocr_processor:
+            QMessageBox.critical(self, "错误", "OCR 处理器未初始化或加载失败。")
+            return
+
+        if self.camera_running and self.cv_image is not None:
+            # 相机始终实时，直接触发一次识别（不暂停）
+            QTimer.singleShot(100, self._perform_camera_recognition)
+        elif self.current_image:
+            # 处理静态图像
+            self.on_start_recognition()
+        else:
+            QMessageBox.warning(self, "无图像", "请先上传图像或启动摄像头。")
+
+    def on_start_recognition(self):
+        """
+        处理开始识别按钮点击事件
+        """
+        if not self.ocr_processor:
+            QMessageBox.critical(self, "错误", "OCR 处理器未初始化或加载失败。")
+            return
+        if not hasattr(self, 'image_path') or not self.image_path or not os.path.exists(self.image_path):
+            QMessageBox.warning(self, "无图像", "请先上传有效的图像文件。")
+            return
+
+        logger.info(f"Starting recognition for static image: {self.image_path}")
+        self.recognize_button.setEnabled(False)
+        self.upload_button.setEnabled(False) # Disable upload during recognition
+        # Update result displays with 'processing' status
+        self.label_text_result.setText("标牌文字: [识别中...]")
+        self.print_text_result.setText("喷码文字: [识别中...]")
+        self._set_status("状态: [处理中...]", self.status_warning_bg)
+        QApplication.processEvents() # Allow UI to update
+
+        try:
+            # 使用已加载的OpenCV图像数据
+            if self.cv_image is None:
+                raise ValueError("无法使用已加载的图像")
+
+            # Perform OCR using the common method
+            results = self._perform_ocr(self.cv_image)
+
+            if results is None: # Check if OCR itself failed
+                raise RuntimeError("OCR 处理返回失败 (None)")
+            
+            # 提取文本和位置信息
+            text_with_positions = []
+            if results and results[0]:
+                for line in results[0]:
+                    if len(line) >= 2 and isinstance(line[1], tuple) and len(line[1]) >= 2:
+                        box = line[0]  # 文本框坐标
+                        text = line[1][0]  # 文本内容
+                        confidence = line[1][1]  # 置信度
+                        
+                        # 计算文本框中心点y坐标，用于判断上下位置
+                        center_y = sum(point[1] for point in box) / len(box)
+                        
+                        text_with_positions.append((box, text, confidence, center_y))
+            
+            # 在图像上绘制文本框
+            if text_with_positions:
+                marked_image = self._draw_text_boxes(self.cv_image.copy(), text_with_positions)
+                # 仅更新右侧预览，不影响相机实时画面
+                h, w, ch = marked_image.shape
+                bytes_per_line = ch * w
+                qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+                pixmap_marked = QPixmap.fromImage(qt_image)
+                preview = pixmap_marked.scaled(self.result_preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.result_preview_label.setPixmap(preview)
+            
+            # --- 选择图号/架次号并复制 ---
+            main_code, head_code, main_box = self._extract_codes(text_with_positions)
+            self.detected_main_code = main_code
+            self.detected_head_code = head_code
+
+            # 高亮图号框（若有）
+            if main_box is not None:
+                marked_image = self._draw_text_boxes(self.cv_image.copy(), [(main_box, main_code or "", 1.0, 0)])
+                h, w, ch = marked_image.shape
+                bytes_per_line = ch * w
+                qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+                pixmap = QPixmap.fromImage(qt_image)
+                pixmap = self._resize_pixmap(pixmap)
+                self.image_label.setPixmap(pixmap)
+
+            # 更新显示与复制
+            self.label_text_result.setText(f"图号: {main_code or '<未检测到>'}")
+            self.print_text_result.setText(f"架次号: {head_code or '<未检测到>'}")
+            if main_code:
+                QApplication.clipboard().setText(main_code)
+                # 严格匹配 → 绿色；仅宽松匹配 → 黄色
+                if self.MAIN_STRICT.fullmatch(main_code):
+                    self._set_status("状态: 已自动复制图号到剪贴板", self.status_success_bg)
+                else:
+                    self._set_status("状态: 图号位数与规范不一致，已复制", self.status_warning_bg)
+                # 播放成功音效
+                if self.pass_sound.source().isValid():
+                    self.pass_sound.play()
+            else:
+                # 未识别到 → 红色
+                self._set_status("状态: 未检测到图号，未复制", self.status_error_bg)
+
+            # 复制架次号按钮状态
+            self.copy_head_button.setEnabled(bool(head_code))
+
+            # 保存记录（仅保存图号，可选）
+            try:
+                if main_code:
+                    self.add_record(self.image_path, main_code, "", "copied")
+            except Exception as e:
+                logger.error(f"Failed to save simplified record: {e}", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"Error during static image recognition: {e}", exc_info=True)
+            QMessageBox.critical(self, "识别错误", f"处理静态图像时出错: {e}")
+            self.label_text_result.setText("标牌文字: 错误")
+            self.print_text_result.setText("喷码文字: 错误")
+            self._set_status("状态: 错误", self.status_error_bg)
+        finally:
+            self.recognize_button.setEnabled(True) # Re-enable recognize button
+            self.upload_button.setEnabled(True) # Re-enable upload button
+
+    def _perform_camera_recognition(self):
+        """执行相机画面识别，与_recognize_current_frame分离以允许短暂延时获取最新画面"""
+        logger.info("Recognizing current camera frame...")
+        # Disable button during processing to prevent multiple clicks
+        self.recognize_button.setEnabled(False)
+        self.recognize_button.setText("识别中...")
+        QApplication.processEvents() # Update UI
+        
+        try:
+            # Perform OCR on the current frame
+            results = self._perform_ocr(self.cv_image.copy()) # Use a copy to avoid race conditions
+            
+            if results is None:
+                 raise RuntimeError("OCR 处理返回失败 (None)")
+            
+            # 提取文本和位置信息
+            text_with_positions = []
+            if results and results[0]:
+                for line in results[0]:
+                    if len(line) >= 2 and isinstance(line[1], tuple) and len(line[1]) >= 2:
+                        box = line[0]  # 文本框坐标
+                        text = line[1][0]  # 文本内容
+                        confidence = line[1][1]  # 置信度
+                        
+                        # 计算文本框中心点y坐标，用于判断上下位置
+                        center_y = sum(point[1] for point in box) / len(box)
+                        
+                        text_with_positions.append((box, text, confidence, center_y))
+            
+            # 如果没有识别到文本
+            if not text_with_positions:
+                self.label_text_result.setText("标牌文字: <未识别到文本>")
+                self.print_text_result.setText("喷码文字: <未识别到文本>")
+                # 未识别到有效图号：红色
+                self._set_status("状态: <无法比对>", self.status_error_bg)
+                # 结果区保持透明
+                self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
+                return
+            
+            # 在图像上绘制文本框
+            marked_image = self._draw_text_boxes(self.cv_image.copy(), text_with_positions)
+            
+            # 将标记后的图像转换为QPixmap
+            h, w, ch = marked_image.shape
+            bytes_per_line = ch * w
+            qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+            pixmap_marked = QPixmap.fromImage(qt_image)
+            # 右侧预览显示标记图，不改变左侧相机画面
+            preview = pixmap_marked.scaled(self.result_preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.result_preview_label.setPixmap(preview)
+            # 保持左侧相机画面显示当前帧（未标记），避免视觉停留
+            if self.cv_image is not None:
+                h2, w2, ch2 = self.cv_image.shape
+                bytes_per_line2 = ch2 * w2
+                qt_image2 = QImage(self.cv_image.data, w2, h2, bytes_per_line2, QImage.Format_RGB888).rgbSwapped()
+                pixmap_frame = QPixmap.fromImage(qt_image2)
+                pixmap_frame = self._resize_pixmap(pixmap_frame)
+                self.image_label.setPixmap(pixmap_frame)
+            self.current_image = None # Ensure static image is cleared
+
+            # 相机永远实时：根据复选框决定是否自动轮询识别，但不暂停画面
+            if self.realtime_checkbox.isChecked():
+                QTimer.singleShot(800, self._maybe_realtime_recognize)
+            
+            # 按y坐标排序，区分上下文本
+            text_with_positions.sort(key=lambda x: x[3])
+            
+            # 假设上半部分是标牌文字，下半部分是喷码文字
+            # 计算中间分界线
+            height = self.cv_image.shape[0]
+            middle_y = height / 2
+            
+            label_texts = []
+            print_texts = []
+            
+            for item in text_with_positions:
+                box, text, confidence, center_y = item
+                if center_y < middle_y:
+                    label_texts.append(text)
+                else:
+                    print_texts.append(text)
+            
+            # 如果某一部分没有识别到文本，可能是图像问题或识别问题
+            if not label_texts:
+                label_text = "<未识别到标牌文字>"
+            else:
+                label_text = " ".join(label_texts)
+            
+            if not print_texts:
+                print_text = "<未识别到喷码文字>"
+            else:
+                print_text = " ".join(print_texts)
+            
+            # 直接解析为图号/架次号
+            main_code, head_code, main_box = self._extract_codes(text_with_positions)
+            self.detected_main_code = main_code
+            self.detected_head_code = head_code
+
+            # 高亮图号框
+            if main_box is not None:
+                marked_image = self._draw_text_boxes(self.cv_image.copy(), [(main_box, main_code or "", 1.0, 0)])
+                h, w, ch = marked_image.shape
+                bytes_per_line = ch * w
+                qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+                pixmap_marked = QPixmap.fromImage(qt_image)
+                preview = pixmap_marked.scaled(self.result_preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.result_preview_label.setPixmap(preview)
+
+            # 更新UI显示与复制
+            self.label_text_result.setText(f"图号: {main_code or '<未检测到>'}")
+            self.print_text_result.setText(f"架次号: {head_code or '<未检测到>'}")
+            if main_code:
+                QApplication.clipboard().setText(main_code)
+                if self.MAIN_STRICT.fullmatch(main_code):
+                    self._set_status("状态: 已自动复制图号到剪贴板", self.status_success_bg)
+                else:
+                    self._set_status("状态: 图号位数与规范不一致，已复制", self.status_warning_bg)
+                if self.pass_sound.source().isValid():
+                    self.pass_sound.play()
+            else:
+                self._set_status("状态: 未检测到图号，未复制", self.status_error_bg)
+
+            self.copy_head_button.setEnabled(bool(head_code))
+
+            # 保存记录到数据库（保存带标注的图像）
+            try:
+                from datetime import datetime
+                capture_dir = self._ensure_capture_dir()
+                filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                save_path = os.path.join(capture_dir, filename)
+                image_to_save = self._build_captured_image(self.cv_image, text_with_positions, main_code, head_code, main_box)
+                cv2.imwrite(save_path, image_to_save)
+                if main_code:
+                    self.add_record(save_path, main_code, "", "copied")
+            except Exception as e:
+                logger.error(f"Failed to save simplified camera record: {e}", exc_info=True)
+
+        except Exception as e:
+             logger.error(f"Error during camera frame recognition: {e}", exc_info=True)
+             QMessageBox.critical(self, "识别错误", f"处理摄像头帧时出错: {e}")
+             self.label_text_result.setText("标牌文字: 错误")
+             self.print_text_result.setText("喷码文字: 错误")
+             self._set_status("状态: 错误", self.status_error_bg)
+             self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
+        finally:
+             # Re-enable button only if camera is still running AND not paused
+             if self.camera_running and not self.pause_camera_updates:
+                 self.recognize_button.setEnabled(True)
+                 self.recognize_button.setText(" 开始识别")
+             elif not self.camera_running: # If camera stopped during processing
+                  self.recognize_button.setEnabled(False) # Keep disabled if static img not loaded
+                  self.recognize_button.setText(" 开始识别")
+             # Resume button state is handled when pausing/resuming
+
+    def _maybe_realtime_recognize(self):
+        # 若处于实时识别且相机运行，则再触发一次识别（不检查暂停状态）
+        if self.realtime_checkbox.isChecked() and self.camera_running:
+            self._perform_camera_recognition()
+
+    def on_toggle_realtime(self, checked: bool):
+        # 切换实时识别：如果开启且相机运行，立即启动一次识别循环
+        if checked:
+            # 开启实时识别：开始自动识别（相机本就实时）
+            if self.camera_running:
+                QTimer.singleShot(200, self._maybe_realtime_recognize)
+        else:
+            # 关闭实时识别，不做额外动作
+            pass
+
+    def _resize_pixmap(self, pixmap):
+        """
+        调整图像大小以适应标签
+        
+        Args:
+            pixmap (QPixmap): 原始图像
+            
+        Returns:
+            QPixmap: 调整大小后的图像
+        """
+        # 获取标签可用内容区大小（扣除边框等），防止被布局压缩时误判
+        label_size = self.image_label.contentsRect().size()
+        if label_size.width() <= 0 or label_size.height() <= 0:
+            label_size = self.image_label.size()
+        # 不裁剪画面：等比缩放，完整显示，并考虑屏幕缩放(DPI)
+        try:
+            dpr = float(self.devicePixelRatioF()) if hasattr(self, 'devicePixelRatioF') else 1.0
+        except Exception:
+            dpr = 1.0
+        target_w = max(1, int(label_size.width() * dpr))
+        target_h = max(1, int(label_size.height() * dpr))
+        scaled = pixmap.scaled(target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        try:
+            scaled.setDevicePixelRatio(dpr)
+        except Exception:
+            pass
+        return scaled
+
+    def _fit_image_container_to_aspect(self, aspect_w_over_h: float):
+        """根据帧宽高比，调整图片容器高度使其与画面匹配（不裁剪）。"""
+        try:
+            parent_widget = self.image_label.parent() or self.image_label
+            available_width = max(1, parent_widget.width())
+            available_height = max(1, parent_widget.height())
+            # 先按宽度算出理想高度
+            ideal_height = int(available_width / max(0.0001, aspect_w_over_h))
+            # 最终高度受父容器高度上限约束，避免超出导致下方看起来被“裁切”
+            target_height = min(ideal_height, available_height)
+            # 设一个较小的下限，避免过矮
+            target_height = max(240, target_height)
+            if self.image_label.height() != target_height:
+                self.image_label.setMinimumHeight(target_height)
+                self.image_label.setMaximumHeight(target_height)
+        except Exception as e:
+            logger.debug(f"_fit_image_container_to_aspect failed: {e}")
+
+    def resizeEvent(self, event):
+        try:
+            if hasattr(self, 'last_frame_aspect_ratio') and self.last_frame_aspect_ratio:
+                self._fit_image_container_to_aspect(self.last_frame_aspect_ratio)
+        except Exception:
+            pass
+        return super().resizeEvent(event)
+
+    def _perform_ocr(self, image_data):
+        """Performs OCR using the initialized processor.
+
+        Args:
+            image_data (np.ndarray): The image data (OpenCV format, BGR).
+
+        Returns:
+            list: The OCR results from PaddleOCR, or None if error.
+                  Format assumption: [[box, (text, confidence)], ...]
+        """
+        if not self.ocr_processor:
+            logger.error("Attempted to perform OCR, but processor is not initialized.")
+            return None
+        if image_data is None:
+            logger.error("Attempted to perform OCR on None image data.")
+            return None
+
+        try:
+            logger.info("Calling OCR processor...")
+            # 使用OCR处理器进行识别
+            results = self.ocr_processor.ocr(image_data, cls=True)
+            
+            # 基本验证结果格式
+            if results is None: 
+                logger.warning("OCR processor returned None.")
+                return None
+                
+            return results
+        except Exception as e:
+            logger.error(f"Exception during OCR processing: {e}", exc_info=True)
+            return None
+
+    def _draw_text_boxes(self, image, text_boxes):
+        """
+        在图像上绘制文本框
+        
+        Args:
+            image: OpenCV格式的图像
+            text_boxes: 文本框列表，每个元素包含 (box, text, confidence)
+        
+        Returns:
+            带有文本框标记的图像
+        """
+        if image is None or not text_boxes:
+            return image
+            
+        # 创建图像副本，避免修改原图
+        marked_image = image.copy()
+        
+        # 为不同类型的文本设置不同颜色
+        colors = [
+            (0, 255, 0),    # 绿色 - 标牌文字
+            (0, 0, 255),    # 红色 - 喷码文字
+            (255, 0, 0)     # 蓝色 - 其他文字
+        ]
+        
+        # 计算字体大小，根据图像尺寸调整
+        height, width = image.shape[:2]
+        font_scale = min(width, height) / 500  # 增大字体大小1倍（从1000改为500）
+        font_scale = max(0.5, min(font_scale, 2.0))  # 调整上限从1.5到2.0
+        
+        # 绘制每个文本框
+        for i, (box, text, confidence, _) in enumerate(text_boxes):
+            # 确定颜色索引
+            color_idx = i % len(colors) if i < 2 else 2
+            color = colors[color_idx]
+            
+            # Initialize coordinates and extraction flag
+            coordinates_extracted = False
+            x1, y1, x2, y2 = 0, 0, 0, 0 # Default values
+
+            # Check box format and extract coordinates
+            if isinstance(box, list) and len(box) == 4 and isinstance(box[0], list) and len(box[0]) == 2:
+                try: # Handle potential errors during point processing
+                    pts = np.array(box, dtype=np.int32)
+                    # Draw the polygon bounding box first
+                    cv2.polylines(marked_image, [pts], isClosed=True, color=color, thickness=2)
+                    # Extract top-left (x1, y1) for text positioning reference
+                    x1, y1 = pts[0] 
+                    # x2, y2 = pts[2] # Bottom-right might not be needed for text
+                    coordinates_extracted = True
+                except Exception as e:
+                     self.logger.warning(f"Error processing polygon box points {box}: {e}")
+            elif isinstance(box, (list, tuple)) and len(box) == 4:
+                try: # Handle potential errors during point processing
+                     # Assuming [x1, y1, x2, y2] format
+                    x1, y1, x2, y2 = map(int, box)
+                     # Draw rectangle bounding box first
+                    cv2.rectangle(marked_image, (x1, y1), (x2, y2), color, 2)
+                    coordinates_extracted = True
+                except Exception as e:
+                     self.logger.warning(f"Error processing rectangle box points {box}: {e}")
+            else:
+                self.logger.warning(f"Unsupported box format received: {box}. Cannot draw text for this box.")
+                # coordinates_extracted remains False
+
+            # --- Draw text only if coordinates were successfully extracted --- 
+            if coordinates_extracted:
+                # Filter text to keep only ASCII characters
+                ascii_text = ''.join(char for char in text if ord(char) < 128).strip()
+                
+                # Draw text only if there's something left after filtering
+                if ascii_text:
+                    try: # Add try-except for robustness in text drawing
+                        font_face = cv2.FONT_HERSHEY_SIMPLEX
+                        font_scale = 0.6
+                        text_thickness = 1
+                        (text_width, text_height), baseline = cv2.getTextSize(ascii_text, font_face, font_scale, text_thickness)
+
+                        # --- Calculate text placement --- 
+                        # Check if there's enough space above the box
+                        required_space_above = text_height + baseline + 4
+                        place_above = (y1 >= required_space_above)
+
+                        if place_above:
+                            # Place label above the box
+                            text_bg_y1 = y1 - required_space_above
+                            text_y = y1 - baseline - 2
+                        else:
+                            # Place label inside the box (top-left corner)
+                            text_bg_y1 = y1 + 2
+                            text_y = y1 + text_height + 2
+                            # Ensure text_y is not below the image
+                            text_y = min(text_y, height - baseline - 1) 
+                            text_bg_y1 = max(0, min(text_bg_y1, height - text_height - baseline - 4 -1)) # Clamp bg y1
+
+                        # Calculate horizontal placement (common for both above/below)
+                        text_x = x1 + 2
+                        text_bg_x1 = x1
+                        text_bg_x2 = x1 + text_width + 4
+                        text_bg_y2 = text_bg_y1 + text_height + baseline + 4
+
+                        # --- Clamp coordinates within image boundaries --- 
+                        text_bg_x1 = max(0, min(text_bg_x1, width - 1))
+                        text_bg_y1 = max(0, min(text_bg_y1, height - 1))
+                        text_bg_x2 = max(0, min(text_bg_x2, width - 1))
+                        text_bg_y2 = max(0, min(text_bg_y2, height - 1))
+                        text_x = max(0, min(text_x, width - text_width - 1)) # Ensure text start is within bounds
+                        text_y = max(text_height, min(text_y, height - baseline - 1)) # Ensure text baseline is within bounds
+                    
+                        # Ensure coordinates are integers for drawing
+                        text_bg_x1, text_bg_y1, text_bg_x2, text_bg_y2 = map(int, [text_bg_x1, text_bg_y1, text_bg_x2, text_bg_y2])
+                        text_x, text_y = map(int, [text_x, text_y])
+
+                        # --- Draw background and text --- 
+                        # Draw background rectangle if coordinates are valid
+                        if text_bg_x2 > text_bg_x1 and text_bg_y2 > text_bg_y1:
+                            cv2.rectangle(marked_image, (text_bg_x1, text_bg_y1), (text_bg_x2, text_bg_y2), (255, 255, 255), cv2.FILLED)
+                            # Draw the ASCII text using standard cv2.putText
+                            cv2.putText(marked_image, ascii_text, (text_x, text_y), font_face, font_scale, color, text_thickness, cv2.LINE_AA)
+                        else:
+                             self.logger.warning(f"Skipping drawing text background/text for '{ascii_text}' due to invalid coordinates after clamping.")
+
+                    except Exception as e:
+                        self.logger.error(f"Error drawing text '{ascii_text}' for box {box}: {e}")
+            # else: Coordinates were not extracted, skipping text drawing
+
+        return marked_image
+
+    def _set_status(self, text: str, bg_color: str):
+        try:
+            self.comparison_result.setText(text)
+            self.comparison_result.setStyleSheet(
+                f"QLabel {{ background-color: {bg_color}; border: 1px solid #cccccc; border-radius: 4px; padding: 8px; }}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to set status style: {e}")
+
+    def _build_captured_image(self, base_frame, text_with_positions, main_code, head_code, main_box):
+        """构建用于保存的带标注图像：
+        - 叠加所有文本框标注
+        - 高亮图号框
+        - 左上角绘制图号/架次号与时间信息
+        """
+        try:
+            image_to_save = base_frame.copy()
+            # 仅绘制绿色框，不在框边标注文字
+            try:
+                for item in text_with_positions or []:
+                    box = item[0]
+                    if isinstance(box, list) and len(box) == 4 and isinstance(box[0], list):
+                        pts = np.array(box, dtype=np.int32)
+                        cv2.polylines(image_to_save, [pts], isClosed=True, color=(0, 255, 0), thickness=2)
+                    elif isinstance(box, (list, tuple)) and len(box) == 4:
+                        x1, y1, x2, y2 = map(int, box)
+                        cv2.rectangle(image_to_save, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            except Exception:
+                pass
+
+            # 高亮图号框（绿色）
+            if main_box and isinstance(main_box, (list, tuple)):
+                try:
+                    if isinstance(main_box, list) and len(main_box) == 4 and isinstance(main_box[0], list):
+                        pts = np.array(main_box, dtype=np.int32)
+                        cv2.polylines(image_to_save, [pts], isClosed=True, color=(0, 255, 0), thickness=3)
+                    elif len(main_box) == 4:
+                        x1, y1, x2, y2 = map(int, main_box)
+                        cv2.rectangle(image_to_save, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                except Exception:
+                    pass
+
+            # 在左上角绘制结果信息
+            try:
+                # 使用 ASCII 标签，避免 OpenCV 字体无法渲染中文导致的问号
+                overlay_lines = [
+                    f"MAIN: {main_code or '<NONE>'}",
+                    f"HEAD: {head_code or '<NONE>'}"
+                ]
+                from datetime import datetime
+                overlay_lines.append(f"TIME: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                # 字体缩小约 30%，线条更细
+                scale = 0.42
+                thickness = 1
+                margin = 10
+                line_gap = 6
+
+                # 计算背景框大小
+                text_sizes = [cv2.getTextSize(t, font, scale, thickness)[0] for t in overlay_lines]
+                box_width = max(w for w, h in text_sizes) + margin * 2
+                box_height = sum(h for w, h in text_sizes) + margin * 2 + line_gap * (len(text_sizes) - 1)
+
+                # 背景与边框
+                cv2.rectangle(image_to_save, (5, 5), (5 + box_width, 5 + box_height), (255, 255, 255), cv2.FILLED)
+                cv2.rectangle(image_to_save, (5, 5), (5 + box_width, 5 + box_height), (0, 0, 0), 1)
+
+                # 绘制文字
+                x = 5 + margin
+                y = 5 + margin + text_sizes[0][1]
+                for idx, line in enumerate(overlay_lines):
+                    cv2.putText(image_to_save, line, (x, y), font, scale, (0, 0, 0), thickness, cv2.LINE_AA)
+                    if idx < len(overlay_lines) - 1:
+                        y += text_sizes[idx + 1][1] + line_gap
+            except Exception:
+                pass
+
+            return image_to_save
+        except Exception:
+            return base_frame
+
+    def _normalize_and_validate(self, s: str) -> str:
+        # 仅允许大写/数字/英文点，删除空格；去除尾点
+        if s is None:
+            return ""
+        s = s.strip().replace(' ', '').upper()
+        if s.endswith('.'):
+            s = s[:-1]
+        # 验证字符集合
+        for ch in s:
+            if not (ch.isupper() or ch.isdigit() or ch == '.'):
+                return ""  # 非法行
+        return s
+
+    def _extract_codes(self, text_with_positions):
+        """从OCR行中提取图号与架次号。
+        Returns: (main_code, head_code, main_box)
+        """
+        main_candidates = []  # (score, text, box)
+        head_candidate = None
+        for item in text_with_positions or []:
+            box, text, confidence, _cy = item
+            norm = self._normalize_and_validate(text)
+            if not norm:
+                continue
+            # 架次号
+            if self.HEAD_REGEX.fullmatch(norm) and head_candidate is None:
+                head_candidate = norm
+            # 图号评分
+            score = 0.0
+            if self.MAIN_STRICT.fullmatch(norm):
+                score = 2.0
+            elif self.MAIN_FALLBACK.fullmatch(norm):
+                score = 1.5
+            if score > 0:
+                # 融合置信度
+                score += 0.5 * float(confidence or 0)
+                main_candidates.append((score, norm, box))
+        if main_candidates:
+            main_candidates.sort(key=lambda x: x[0], reverse=True)
+            best = main_candidates[0]
+            return best[1], head_candidate, best[2]
+        return None, head_candidate, None
+
+    def copy_head_to_clipboard(self):
+        """复制最近一次识别到的架次号到剪贴板。"""
+        if self.detected_head_code:
+            QApplication.clipboard().setText(self.detected_head_code)
+            self.statusBar().showMessage(f"架次号已复制: {self.detected_head_code}", 3000)
+        else:
+            self.statusBar().showMessage("当前无可复制的架次号", 3000)
+
+    def add_record(self, image_path, sign_text, print_text, result_text):
+        """将识别结果保存到数据库"""
+        try:
+            # 从比对结果中提取相似度
+            import re
+            similarity = 0.0
+            if "相似度:" in result_text:
+                match = re.search(r'相似度: (\d+)%', result_text)
+                if match:
+                    similarity = float(match.group(1)) / 100
+            
+            # 提取结果（通过/不通过）
+            # 更精确地判断是否通过，检查是否包含"✓ 通过"而不是仅检查"通过"
+            result = "通过" if "✓ 通过" in result_text else "不通过"
+            
+            # 调用数据库函数保存记录
+            from src.utils.database_manager import add_history_record
+            add_history_record(image_path, sign_text, print_text, similarity, result)
+            logger.info(f"Record saved: {image_path}, {sign_text}, {print_text}, {similarity}, {result}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save record: {e}")
+            return False
+
+    def _ensure_capture_dir(self):
+        """确保捕获图像的保存目录存在"""
+        capture_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'captures')
+        os.makedirs(capture_dir, exist_ok=True)
+        return capture_dir
+
+    def _show_history_window(self):
+        """Opens the history window dialog."""
+        # Check if an instance already exists to avoid multiple windows (optional)
+        # Or simply create a new modal dialog each time
+        history_dialog = HistoryWindow(self) # Pass parent for modality if desired
+        history_dialog.exec_() # Show as a modal dialog
+
+    def on_open_settings(self):
+        """
+        处理打开设置按钮点击事件
+        """
+        QMessageBox.information(
+            self, 
+            "信息", 
+            "设置功能将在后续阶段实现"
+        )
+
+    def start_camera(self):
+        """启动摄像头捕获线程"""
+        if self.camera_running:
+            logger.warning("Camera already running.")
+            return
+        
+        # Check if cameras were detected during init
+        if not self.available_cameras:
+             logger.error("Cannot start camera: No cameras available.")
+             QMessageBox.warning(self, "相机错误", "未检测到可用摄像头，无法启动。")
+             return
+
+        # Ensure selected index is valid 
+        if self.selected_camera_index not in self.available_cameras:
+             logger.error(f"Cannot start camera: Selected index {self.selected_camera_index} is not available in {self.available_cameras}.")
+             # Reset selection to the first available one if possible
+             if self.available_cameras:
+                 self.selected_camera_index = self.available_cameras[0]
+                 # Find the corresponding text in the combo box to update UI
+                 for i in range(self.camera_selection_combo.count()):
+                     if self.camera_selection_combo.itemData(i) == self.selected_camera_index:
+                         self.camera_selection_combo.setCurrentIndex(i)
+                         break
+                 logger.warning(f"Resetting selected camera index to {self.selected_camera_index}")
+                 self.statusBar().showMessage(f'重置为相机 {self.selected_camera_index}')
+             else: # Should have been caught by the first check
+                 return 
+
+        logger.info(f"Starting camera with index: {self.selected_camera_index}")
+        self.statusBar().showMessage(f'正在启动相机 {self.selected_camera_index}...')
+        QApplication.processEvents() # Update UI immediately
+        
+        # Clear any existing image display
+        if self.current_image:
+            self.current_image = None
+            self.cv_image = None
+            self.image_label.clear()
+            self.image_label.setText("启动摄像头...") 
+        
+        self.camera_thread = QThread(self) # Parent to main window
+        # Pass the selected camera index to the worker
+        self.camera_worker = CameraWorker(camera_index=self.selected_camera_index) 
+        self.camera_worker.moveToThread(self.camera_thread)
+
+        # Connect signals
+        self.camera_thread.started.connect(self.camera_worker.run)
+        self.camera_worker.frame_ready.connect(self.update_frame)
+        self.camera_worker.error_occurred.connect(self.handle_camera_error)
+        self.camera_worker.camera_opened.connect(self.update_camera_status)
+        
+        # Ensure cleanup using finished signals
+        # Disconnect previous connections first to be safe if restarting
+        try: self.camera_worker.finished.disconnect() 
+        except TypeError: pass
+        try: self.camera_thread.finished.disconnect() 
+        except TypeError: pass
+        
+        self.camera_worker.finished.connect(self.camera_thread.quit) 
+        self.camera_worker.finished.connect(self.camera_worker.deleteLater) 
+        self.camera_thread.finished.connect(self.camera_thread.deleteLater)
+
+        # Start the thread
+        self.camera_thread.start()
+        logger.info("Camera thread started.")
+        # self.camera_running state will be set by update_camera_status signal
+
+    def stop_camera(self):
+        """停止摄像头捕获线程"""
+        logger.info("Entering stop_camera...")
+        if self.camera_thread and self.camera_worker:
+            logger.info("Signaling CameraWorker to stop...")
+            self.camera_worker.stop()
+            logger.info("Signal sent. Quitting camera_thread...")
+            self.camera_thread.quit()
+            logger.info("Waiting for camera_thread to finish...")
+            # Wait for 5 seconds max, otherwise force termination? 
+            # wait() can block indefinitely if the thread doesn't terminate.
+            finished = self.camera_thread.wait(5000) # Wait up to 5000ms (5 seconds)
+            if finished:
+                logger.info("Camera thread finished gracefully.")
+            else:
+                logger.warning("Camera thread did not finish within 5 seconds. It might be stuck.")
+                # Optionally, you could try termination here, but it's risky:
+                # logger.warning("Forcing thread termination...")
+                # self.camera_thread.terminate() # Use with caution!
+                # self.camera_thread.wait() # Wait again after terminate
+        else:
+            logger.warning("stop_camera called but thread or worker was None.")
+
+        # Explicitly set running state false *after* confirming thread stop (or timeout)
+        self.camera_running = False
+        logger.info("Camera thread stopped and resources potentially released.") # Adjusted message
+
+        # Clear references to the old thread and worker after stopping
+        # Let deleteLater handle the actual deletion by Qt's event loop
+        self.camera_thread = None
+        self.camera_worker = None
+        logger.info("Cleared references to camera_thread and camera_worker.")
+
+        # Reset image label 
+        self.image_label.clear() # Clear pixmap first
+        self.image_label.setText("请拖拽图片到此处或点击\"上传图像\"按钮") # Corrected text
+        self.image_label.setStyleSheet("background-color: #f0f0f0; color: gray;")
+        self.cv_image = None 
+
+        # Re-enable camera selection if multiple cameras are available
+        if self.available_cameras and len(self.available_cameras) > 1:
+             self.camera_selection_combo.setEnabled(True) 
+
+        # Update mode switch button
+        self.switch_mode_button.setText(" 切换到相机")
+        self.switch_mode_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        try:
+            self.switch_mode_button.clicked.disconnect()
+        except TypeError: pass 
+        self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
+        
+        logger.info("stop_camera finished.")
+
+    def update_frame(self, frame: np.ndarray):
+        """接收摄像头帧并更新UI"""
+        if not self.camera_running:
+            return
+            
+        try:
+            self.cv_image = frame.copy() # Save frame
+            h, w, ch = frame.shape
+            # 恢复之前的容器高度自适应 + _resize_pixmap 统一缩放
+            if h > 0:
+                self.last_frame_aspect_ratio = w / float(h)
+                self._fit_image_container_to_aspect(self.last_frame_aspect_ratio)
+            bytes_per_line = ch * w
+            qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+            pixmap = QPixmap.fromImage(qt_image)
+            pixmap = self._resize_pixmap(pixmap)
+            self.image_label.setPixmap(pixmap) # Display frame
+            self.current_image = None # Ensure static image is cleared
+        except Exception as e:
+            logger.error(f"Error in update_frame: {e}", exc_info=True)
+
+    def handle_camera_error(self, error_message: str):
+        """处理来自CameraWorker的错误信号"""
+        logger.error(f"Camera Error: {error_message}")
+        QMessageBox.critical(self, "摄像头错误", error_message)
+        self.camera_running = False # Force state update
+        # Re-enable camera selection if applicable
+        if self.available_cameras and len(self.available_cameras) > 1:
+             self.camera_selection_combo.setEnabled(True) 
+        # Update UI, maybe switch back to image mode?
+        # self.switch_to_image_mode() # Let's not force switch mode on error, just enable selection
+        # Update button states if needed
+        self.recognize_button.setEnabled(False) # Can't recognize if camera failed
+        self.switch_mode_button.setText(" 切换到相机")
+        self.switch_mode_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        try: self.switch_mode_button.clicked.disconnect()
+        except TypeError: pass
+        self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
+
+    def update_camera_status(self, opened: bool):
+        """更新摄像头状态标签和按钮"""
+        self.camera_running = opened
+        # Always ensure combo box is enabled if multiple cameras exist
+        if self.available_cameras and len(self.available_cameras) > 1:
+            self.camera_selection_combo.setEnabled(True) 
+
+        if opened:
+            logger.info(f"Camera {self.selected_camera_index} successfully opened.")
+            self.statusBar().showMessage(f'相机 {self.selected_camera_index} 已连接')
+            self.recognize_button.setEnabled(True) # Enable recognition button
+            self.switch_mode_button.setText(" 切换到图片")
+            self.switch_mode_button.setIcon(QIcon(os.path.join("resources", "icons", "image_mode.png"))) # Update icon maybe?
+            try:
+                self.switch_mode_button.clicked.disconnect()
+            except TypeError: pass
+            self.switch_mode_button.clicked.connect(self.switch_to_image_mode)
+        else:
+            logger.error(f"Failed to open camera {self.selected_camera_index}.")
+            self.statusBar().showMessage(f'相机 {self.selected_camera_index} 打开失败')
+            # Message box is now handled in handle_camera_error which is usually triggered before this
+            # Ensure UI reflects image mode state as camera failed
+            self.recognize_button.setEnabled(False) # Can't recognize if camera failed
+            self.switch_mode_button.setText(" 切换到相机")
+            self.switch_mode_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            try: self.switch_mode_button.clicked.disconnect()
+            except TypeError: pass
+            self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
+
+    def _init_sounds(self):
+        """
+        初始化通过和失败的音效
+        """
+        self.pass_sound = QSoundEffect(self)
+        # 构建相对于项目根目录的路径
+        pass_sound_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'assets', 'sounds', 'pass.wav')
+        if not os.path.exists(pass_sound_path):
+             logger.warning(f"Pass sound file not found at: {pass_sound_path}")
+             self.pass_sound.setSource(QUrl())
+        else:
+            self.pass_sound.setSource(QUrl.fromLocalFile(pass_sound_path))
+            logger.info(f"Loaded pass sound from: {pass_sound_path}")
+        self.pass_sound.setVolume(0.8)
+        # 恢复预热以避免首次不响
+        try:
+            orig = self.pass_sound.volume()
+            self.pass_sound.setVolume(0.0)
+            if self.pass_sound.source().isValid():
+                self.pass_sound.play()
+                QTimer.singleShot(120, lambda: (self.pass_sound.stop(), self.pass_sound.setVolume(orig)))
+        except Exception:
+            pass
+
+        self.fail_sound = QSoundEffect(self)
+        fail_sound_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'assets', 'sounds', 'fail.wav')
+        if not os.path.exists(fail_sound_path):
+            logger.warning(f"Fail sound file not found at: {fail_sound_path}")
+            self.fail_sound.setSource(QUrl())
+        else:
+            self.fail_sound.setSource(QUrl.fromLocalFile(fail_sound_path))
+            logger.info(f"Loaded fail sound from: {fail_sound_path}")
+        self.fail_sound.setVolume(0.8)
+        try:
+            origf = self.fail_sound.volume()
+            self.fail_sound.setVolume(0.0)
+            if self.fail_sound.source().isValid():
+                self.fail_sound.play()
+                QTimer.singleShot(120, lambda: (self.fail_sound.stop(), self.fail_sound.setVolume(origf)))
+        except Exception:
+            pass
+
+    def eventFilter(self, obj, event):
+        # 全局捕获鼠标中键按下
+        try:
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.MiddleButton:
+                self._recognize_current_frame()
+                return True
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
