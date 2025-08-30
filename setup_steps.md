@@ -1,46 +1,20 @@
-# CheckCheck 环境设置步骤
+# 环境与启动
 
-由于在批处理文件中执行conda命令时遇到一些问题，请按照以下步骤手动设置环境：
+## 一键启动（推荐）
+- 双击 `start_with_conda.bat`，脚本会在已配置好的 conda 环境下启动应用
 
-## 1. 配置conda使用清华镜像
+## 手动方式（如需）
+1. 创建并激活环境（Python 3.8）：
+   - conda create -y -n checkcheck python=3.8
+   - conda activate checkcheck
+2. 安装依赖：
+   - pip install -r requirements.txt
+3. 启动：
+   - python src/main.py
 
-打开命令提示符或PowerShell，执行以下命令：
-
-```bash
-conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free/
-conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/
-conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/
-conda config --set show_channel_urls yes
-conda config --set ssl_verify false
-conda config --remove channels defaults
-```
-
-## 2. 创建Python 3.8环境
-
-```bash
-conda create -y -n checkcheck python=3.8
-```
-
-## 3. 激活环境并安装依赖
-
-```bash
-conda activate checkcheck
-pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
-```
-
-## 4. 启动应用程序
-
-```bash
-conda activate checkcheck
-python src/main.py
-```
-
-## 5. 打包环境（可选，用于离线部署）
-
-```bash
-conda activate checkcheck
-conda install -y -c conda-forge conda-pack
-conda pack -n checkcheck -o checkcheck_env.tar.gz
-```
-
-按照上述步骤操作，应该能够成功创建环境并安装依赖。
+## 离线交付（conda-pack）
+1. 在联网开发机：
+   - conda install -y -c conda-forge conda-pack
+   - conda pack -n checkcheck -o checkcheck_env.tar.gz
+2. 复制到离线电脑并解压到应用目录内（或同级）
+3. 使用提供的 `start_with_conda.bat` 启动（脚本会优先使用已解压的环境）

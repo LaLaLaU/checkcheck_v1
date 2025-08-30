@@ -1,87 +1,21 @@
-# CheckCheck 项目技术栈与框架
+## 技术栈与框架
 
-本文档描述了 CheckCheck 导管喷码自动核对系统所使用的主要技术和框架。
+- 语言：Python 3.8+
+- GUI：PyQt5 5.15.x
+- 视觉：OpenCV-Python
+- OCR：PaddleOCR 2.10.0（PaddlePaddle 3.0.0）
+- 数据库：SQLite
+- 音频：QSoundEffect
+- 多线程：QThread（相机）
+- 打包/部署：conda、conda-pack（离线），PyInstaller（可选）
 
-## 核心技术栈
+### 结构与模块
+- `ui/`：`main_window.py`、`history_window.py`
+- `core/`：`ocr_engine.py`、`region_detector.py`（保留 `text_comparator.py` 文件但主流程不再使用）
+- `processing/`：`ocr_processor.py`
+- `utils/`：`database_manager.py`
+- `workers/`：`camera_worker.py`
 
-*   **编程语言**: Python (版本 3.8)
-    *   选择 Python 3.8 是因为它拥有丰富的库生态系统，特别是在计算机视觉和机器学习领域，并且开发效率高。
-    *   PaddleOCR 官方推荐使用 Python 3.8 版本，以确保最佳兼容性。
-*   **图形用户界面 (GUI)**: PyQt5 (版本 5.15.9)
-    *   PyQt5 是一个成熟的跨平台 GUI 框架，提供了丰富的控件和良好的性能，适合开发桌面应用程序。
-*   **计算机视觉**: OpenCV-Python
-    *   OpenCV 是业界标准的计算机视觉库，用于图像处理（如预处理、形态学操作等）和视频流获取（相机集成）。
-*   **光学字符识别 (OCR) 与文本检测**: PaddleOCR (基于 PaddlePaddle 2.6.0)
-    *   PaddleOCR 是一个优秀的开源 OCR 工具库，用于**图像中的文本区域检测**和识别区域内的中英文、数字等字符。具有较高的准确率和灵活性。
-*   **数值计算**: NumPy
-    *   NumPy 是 Python 科学计算的基础库，用于高效处理图像数据（通常表示为 NumPy 数组）。
-*   **文本比对**: Difflib (Python 标准库)
-    *   Difflib 提供了计算序列差异的功能，适用于比较 OCR 识别出的文本字符串。
-
-## 开发与部署
-
-*   **版本控制**: Git
-    *   用于代码版本管理和协作。
-*   **虚拟环境**: Conda
-    *   用于隔离项目依赖，确保环境一致性。
-    *   已成功创建名为"checkcheck"的conda环境，安装了所有必要的依赖。
-*   **离线部署**: conda-pack
-    *   用于打包conda环境，支持离线部署到无网络的客户端电脑。
-*   **打包工具**: PyInstaller (计划使用)
-    *   用于将 Python 应用程序打包成独立的可执行文件或文件夹，方便在没有 Python 环境的机器上部署。
-
-## 操作系统
-
-*   **目标部署环境**: Windows 10 / 11
-
-## 硬件依赖
-
-*   **工业相机**: WELLIMAGE WI-U9509C (已集成)
-*   **照明设备**: 环形照明 (根据实际效果配置)
-
-## 项目文件结构 (当前实现)
-
-*   **src/**: 包含所有主要的 Python 源代码。
-    *   `main.py`: 程序的启动入口。
-    *   `ui/`: 存放所有与用户界面相关的代码，使用 PyQt5。
-        *   `main_window.py`: 主窗口实现。
-        *   `history_window.py`: 历史记录窗口实现。
-    *   `core/`: 包含核心的业务逻辑，如图像处理、OCR、比对等。
-        *   `ocr_engine.py`: OCR引擎实现。
-        *   `processor.py`: 图像处理器主类。
-        *   `region_detector.py`: 文本区域检测器。
-        *   `text_comparator.py`: 文本比对逻辑实现。
-    *   `utils/`: 存放通用的工具函数或类。
-        *   `database_manager.py`: 数据库管理功能。
-    *   `data/`: 处理数据持久化，如历史记录。
-    *   `workers/`: 存放后台工作线程类。
-        *   `camera_worker.py`: 相机线程工作类。
-*   **resources/**: 存放程序运行所需的静态资源，如图标、模型文件等。
-*   **data/**: 存放程序运行时产生的数据，如配置文件、历史记录数据库等。这个目录通常不纳入版本控制。
-*   **memory_bank/**: 存放项目规划相关的 Markdown 文档。
-    *   `PRD.md`: 产品需求文档。
-    *   `Implementation_Plan.md`: 详细实施计划。
-    *   `TECH_STACK.md`: 当前文件，描述技术选型。
-*   `requirements.txt`: 列出项目所需的 Python 库及其版本。
-*   `README.md`: 项目的入口说明文件。
-
-## 环境管理脚本
-
-*   **install_env.bat**: 用于创建conda环境并安装依赖
-    *   配置了国内镜像源（清华大学镜像）以加速下载
-    *   创建Python 3.8环境
-*   **start_with_conda.bat**: 用于在conda环境中启动应用程序
-*   **pack_env.bat**: 用于打包conda环境以支持离线部署
-
-这个结构有助于保持代码的组织性和可维护性。
-
-## 当前实现功能
-
-*   **文件 I/O**: 实现了图片文件的上传、读取与显示。
-*   **相机集成**: 实现了相机初始化、视频流获取、实时显示等功能。
-*   **OCR 识别**: 集成了 PaddleOCR 实现文本区域检测和识别。
-*   **文本比对**: 实现了文本差异比较和HTML高亮显示。
-*   **历史记录**: 实现了结果保存、查询、筛选和搜索功能。
-*   **多线程处理**: 使用 QThread 实现相机和处理任务的并行处理。
-
-*更新日期: 2025-04-28*
+### 说明
+- 已移除文本比对功能与相关依赖（Difflib 仅作为标准库存在，不在主流程中使用）
+- Paddle 模型路径改为相对路径，存在自定义模型则优先，否则回退默认模型
