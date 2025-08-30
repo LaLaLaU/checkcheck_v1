@@ -41,11 +41,21 @@ class HistoryWindow(QDialog):
 
         self.layout.addLayout(filter_layout) # Add filter layout to main layout
 
-        # 操作区：删除所选记录
+        # 操作区：多选操作 + 删除所选记录
         action_layout = QHBoxLayout()
         self.delete_button = QPushButton("删除所选记录")
         self.delete_button.setToolTip("删除选中的历史记录（不可恢复）")
         self.delete_button.clicked.connect(self._delete_selected_rows)
+        # 全选/全不选/反选
+        self.select_all_button = QPushButton("全选")
+        self.select_all_button.clicked.connect(lambda: self._set_all_checks(True))
+        self.select_none_button = QPushButton("全不选")
+        self.select_none_button.clicked.connect(lambda: self._set_all_checks(False))
+        self.invert_select_button = QPushButton("反选")
+        self.invert_select_button.clicked.connect(self._invert_checks)
+        action_layout.addWidget(self.select_all_button)
+        action_layout.addWidget(self.select_none_button)
+        action_layout.addWidget(self.invert_select_button)
         action_layout.addWidget(self.delete_button)
         action_layout.addStretch(1)
         self.layout.addLayout(action_layout)
@@ -60,26 +70,27 @@ class HistoryWindow(QDialog):
         self.history_table = QTableWidget()
         self.layout.addWidget(self.history_table)
 
-        # Define table columns
-        self.column_headers = ["时间戳", "图片路径", "标牌文字", "喷码文字", "相似度", "结果"]
+        # Define table columns（新增第0列：选择框）
+        self.column_headers = ["选择", "时间戳", "图片路径", "标牌文字", "喷码文字", "相似度", "结果"]
         self.history_table.setColumnCount(len(self.column_headers))
         self.history_table.setHorizontalHeaderLabels(self.column_headers)
         
         # Table properties
-        self.history_table.setEditTriggers(QTableWidget.NoEditTriggers) # Read-only
-        self.history_table.setSelectionBehavior(QTableWidget.SelectRows) # Select whole rows
-        self.history_table.setAlternatingRowColors(True) # Alternate row colors for readability
-        self.history_table.verticalHeader().setVisible(False) # Hide row numbers
+        self.history_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.history_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.history_table.setAlternatingRowColors(True)
+        self.history_table.verticalHeader().setVisible(False)
         self.history_table.setSelectionMode(QTableWidget.ExtendedSelection)
 
         # Adjust column widths
         header = self.history_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents) # Timestamp
-        header.setSectionResizeMode(1, QHeaderView.Stretch) # Image Path (stretch) 
-        header.setSectionResizeMode(2, QHeaderView.Stretch) # Sign Text
-        header.setSectionResizeMode(3, QHeaderView.Stretch) # Print Text
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents) # Similarity
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents) # Result
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # 选择
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # 时间戳
+        header.setSectionResizeMode(2, QHeaderView.Stretch)           # 图片路径
+        header.setSectionResizeMode(3, QHeaderView.Stretch)           # 标牌文字
+        header.setSectionResizeMode(4, QHeaderView.Stretch)           # 喷码文字
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # 相似度
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # 结果
 
         # Connect cell click signal
         self.history_table.cellClicked.connect(self._on_cell_clicked)
@@ -94,69 +105,70 @@ class HistoryWindow(QDialog):
             # For now, just show an empty table if error occurs
             history_data = [] 
 
-        self.history_table.setRowCount(0) # Clear existing rows
+        self.history_table.setRowCount(0)
         self.history_table.setRowCount(len(history_data))
 
         for row_idx, row_data in enumerate(history_data):
             # Format similarity as percentage
             try:
-                similarity_val = float(row_data[4]) # Assuming similarity is at index 4
+                similarity_val = float(row_data[4])
                 similarity_str = f"{similarity_val:.2%}"
             except (ValueError, TypeError):
-                similarity_str = str(row_data[4]) # Fallback if conversion fails
+                similarity_str = str(row_data[4])
             
-            # Create QTableWidgetItem for each cell
+            # 第0列：选择复选框
+            select_item = QTableWidgetItem()
+            select_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            select_item.setCheckState(Qt.Unchecked)
+            self.history_table.setItem(row_idx, 0, select_item)
+
+            # 其余列右移一位
             timestamp_item = QTableWidgetItem(str(row_data[0]))
-            
             image_path_item = QTableWidgetItem(str(row_data[1]))
-            # Style the image path item to look like a link
             link_font = QFont()
             link_font.setUnderline(True)
             image_path_item.setFont(link_font)
             image_path_item.setForeground(QColor('blue'))
-            self.history_table.setItem(row_idx, 1, image_path_item)
-            
+            self.history_table.setItem(row_idx, 2, image_path_item)
+
             sign_text_raw = str(row_data[2])
             print_text_raw = str(row_data[3])
-            
-            # --- Use QTextEdit for RichText (HTML) display --- 
+
             sign_html, print_html = self.comparator.format_diff_html(sign_text_raw, print_text_raw)
-            
-            # Create QTextEdit for sign text
+
             sign_text_edit = QTextEdit()
-            sign_text_edit.setReadOnly(True) # Make it non-editable
-            sign_text_edit.setHtml(sign_html) # Set content using HTML
-            # Style to blend in: remove border, transparent background
+            sign_text_edit.setReadOnly(True)
+            sign_text_edit.setHtml(sign_html)
             sign_text_edit.setStyleSheet("QTextEdit { border: none; background-color: transparent; }")
-            self.history_table.setCellWidget(row_idx, 2, sign_text_edit)
-            
-            # Create QTextEdit for print text
+            self.history_table.setCellWidget(row_idx, 3, sign_text_edit)
+
             print_text_edit = QTextEdit()
             print_text_edit.setReadOnly(True)
             print_text_edit.setHtml(print_html)
             print_text_edit.setStyleSheet("QTextEdit { border: none; background-color: transparent; }")
-            self.history_table.setCellWidget(row_idx, 3, print_text_edit)
-            
+            self.history_table.setCellWidget(row_idx, 4, print_text_edit)
+
             similarity_item = QTableWidgetItem(similarity_str)
             result_item = QTableWidgetItem(str(row_data[5]))
-            
-            # Set items in the table row
-            self.history_table.setItem(row_idx, 0, timestamp_item)
-            self.history_table.setItem(row_idx, 4, similarity_item)
-            self.history_table.setItem(row_idx, 5, result_item)
+
+            self.history_table.setItem(row_idx, 1, timestamp_item)
+            self.history_table.setItem(row_idx, 5, similarity_item)
+            self.history_table.setItem(row_idx, 6, result_item)
 
     def _delete_selected_rows(self):
-        rows = sorted({i.row() for i in self.history_table.selectedIndexes()}, reverse=True)
+        # 优先按勾选行删除；若无勾选，则按表格选择行删除
+        rows = self._get_checked_rows()
+        if not rows:
+            rows = sorted({i.row() for i in self.history_table.selectedIndexes()}, reverse=True)
         if not rows:
             QMessageBox.information(self, "提示", "请先选择要删除的记录")
             return
-        # 收集主键信息：这里没有直接展示 id，所以按时间戳+图片路径+文本联合删除
         keys = []
         for r in rows:
-            timestamp = self.history_table.item(r, 0).text() if self.history_table.item(r,0) else ""
-            image_path = self.history_table.item(r, 1).text() if self.history_table.item(r,1) else ""
-            sign_widget = self.history_table.cellWidget(r, 2)
-            print_widget = self.history_table.cellWidget(r, 3)
+            timestamp = self.history_table.item(r, 1).text() if self.history_table.item(r,1) else ""
+            image_path = self.history_table.item(r, 2).text() if self.history_table.item(r,2) else ""
+            sign_widget = self.history_table.cellWidget(r, 3)
+            print_widget = self.history_table.cellWidget(r, 4)
             sign_text = sign_widget.toPlainText() if sign_widget else ""
             print_text = print_widget.toPlainText() if print_widget else ""
             keys.append((timestamp, image_path, sign_text, print_text))
@@ -166,11 +178,31 @@ class HistoryWindow(QDialog):
             return
         try:
             delete_history_records(keys)
-            # 从表中移除
             for r in rows:
                 self.history_table.removeRow(r)
         except Exception as e:
             QMessageBox.critical(self, "删除失败", f"删除时出错：{e}")
+
+    def _get_checked_rows(self):
+        rows = []
+        for r in range(self.history_table.rowCount()):
+            item = self.history_table.item(r, 0)
+            if item and item.checkState() == Qt.Checked:
+                rows.append(r)
+        return sorted(rows, reverse=True)
+
+    def _set_all_checks(self, checked: bool):
+        state = Qt.Checked if checked else Qt.Unchecked
+        for r in range(self.history_table.rowCount()):
+            item = self.history_table.item(r, 0)
+            if item:
+                item.setCheckState(state)
+
+    def _invert_checks(self):
+        for r in range(self.history_table.rowCount()):
+            item = self.history_table.item(r, 0)
+            if item:
+                item.setCheckState(Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked)
 
     def _apply_filters(self):
         """Applies search and filter criteria to the history table."""
@@ -178,9 +210,9 @@ class HistoryWindow(QDialog):
         filter_text = self.filter_combo.currentText()
 
         for row in range(self.history_table.rowCount()):
-            sign_widget = self.history_table.cellWidget(row, 2)
-            print_widget = self.history_table.cellWidget(row, 3)
-            result_item = self.history_table.item(row, 5)
+            sign_widget = self.history_table.cellWidget(row, 3)
+            print_widget = self.history_table.cellWidget(row, 4)
+            result_item = self.history_table.item(row, 6)
 
             if not sign_widget or not print_widget or not result_item: # Should not happen
                 continue
@@ -215,7 +247,7 @@ class HistoryWindow(QDialog):
 
     def _highlight_text(self, row_index, search_term):
         """Highlights occurrences of search_term in sign and print columns for a given row."""
-        columns_to_highlight = [2, 3] # Sign Text, Print Text
+        columns_to_highlight = [3, 4] # Sign Text, Print Text
 
         highlight_format = QTextCharFormat()
         highlight_format.setBackground(QColor("yellow"))
@@ -247,8 +279,8 @@ class HistoryWindow(QDialog):
 
     def _on_cell_clicked(self, row, column):
         """Handles clicks on table cells."""
-        # Check if the image path column (index 1) was clicked
-        if column == 1:
+        # Check if the image path column (index 2) was clicked
+        if column == 2:
             item = self.history_table.item(row, column)
             if item:
                 image_path = item.text()
@@ -262,6 +294,16 @@ class HistoryWindow(QDialog):
         
         preview_dialog = ImagePreviewDialog(image_path, self)
         preview_dialog.exec_()
+
+    def keyPressEvent(self, event):
+        # 支持 Delete 键快捷删除
+        try:
+            if event.key() == Qt.Key_Delete:
+                self._delete_selected_rows()
+                return
+        except Exception:
+            pass
+        super().keyPressEvent(event)
 
 
 # Example usage (for testing the window layout)
