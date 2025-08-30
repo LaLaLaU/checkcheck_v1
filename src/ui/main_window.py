@@ -153,7 +153,9 @@ class MainWindow(QMainWindow):
 
         # 编译正则：架次号与图号
         self.HEAD_REGEX = re.compile(r'^[A-Z]{1,3}\d{2,4}$')
-        self.MAIN_STRICT = re.compile(r'^[A-Z]{3,8}\.\d{3,8}\.[A-Z]\.\d{3,8}$')
+        # 图号严格规范：(3|4|5)-4-1-3-3，首段首字符为大写字母
+        self.MAIN_STRICT = re.compile(r'^[A-Z][A-Z0-9]{2,4}\.\d{4}\.[A-Z]\.\d{3}\.\d{3}$')
+        # 宽松匹配：用于候选评分（黄色提示），不作为成功标准
         self.MAIN_FALLBACK = re.compile(r'^[A-Z0-9]+(\.[A-Z0-9]+){2,4}$')
 
         # 定义颜色常量
@@ -386,7 +388,9 @@ class MainWindow(QMainWindow):
         # 应用样式
         self.label_text_result.setStyleSheet(self.result_style)
         self.print_text_result.setStyleSheet(self.result_style)
-        self.comparison_result.setStyleSheet(self.result_style)
+        # comparison_result 的背景由 _set_status 动态控制，不用 result_style 的统一背景
+        self.comparison_result.setStyleSheet("")
+        # 结果区整体不再根据识别结果上色，只保留容器边框与透明背景
         self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
         
         # 应用简单的 QSS 样式 (Keep existing styles)
@@ -809,7 +813,8 @@ class MainWindow(QMainWindow):
         """清空识别结果框"""
         self.label_text_result.setText("标牌文字: 等待识别...")
         self.print_text_result.setText("喷码文字: 等待识别...")
-        self.comparison_result.setText("比对结果: 等待比对...")
+        self._set_status("状态: 等待识别...", self.status_warning_bg)
+        # 结果区整体背景保持透明
         self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
         # 清除处理结果
         self.processing_result = None
@@ -846,7 +851,7 @@ class MainWindow(QMainWindow):
         # Update result displays with 'processing' status
         self.label_text_result.setText("标牌文字: [识别中...]")
         self.print_text_result.setText("喷码文字: [识别中...]")
-        self.comparison_result.setText("比对结果: [处理中...]")
+        self._set_status("状态: [处理中...]", self.status_warning_bg)
         QApplication.processEvents() # Allow UI to update
 
         try:
@@ -905,12 +910,17 @@ class MainWindow(QMainWindow):
             self.print_text_result.setText(f"架次号: {head_code or '<未检测到>'}")
             if main_code:
                 QApplication.clipboard().setText(main_code)
-                self._set_status("状态: 已自动复制图号到剪贴板", self.status_success_bg)
+                # 严格匹配 → 绿色；仅宽松匹配 → 黄色
+                if self.MAIN_STRICT.fullmatch(main_code):
+                    self._set_status("状态: 已自动复制图号到剪贴板", self.status_success_bg)
+                else:
+                    self._set_status("状态: 图号位数与规范不一致，已复制", self.status_warning_bg)
                 # 播放成功音效
                 if self.pass_sound.source().isValid():
                     self.pass_sound.play()
             else:
-                self._set_status("状态: 未检测到图号，未复制", self.status_warning_bg)
+                # 未识别到 → 红色
+                self._set_status("状态: 未检测到图号，未复制", self.status_error_bg)
 
             # 复制架次号按钮状态
             self.copy_head_button.setEnabled(bool(head_code))
@@ -927,7 +937,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "识别错误", f"处理静态图像时出错: {e}")
             self.label_text_result.setText("标牌文字: 错误")
             self.print_text_result.setText("喷码文字: 错误")
-            self.comparison_result.setText("比对结果: 错误")
+            self._set_status("状态: 错误", self.status_error_bg)
         finally:
             self.recognize_button.setEnabled(True) # Re-enable recognize button
             self.upload_button.setEnabled(True) # Re-enable upload button
@@ -965,8 +975,10 @@ class MainWindow(QMainWindow):
             if not text_with_positions:
                 self.label_text_result.setText("标牌文字: <未识别到文本>")
                 self.print_text_result.setText("喷码文字: <未识别到文本>")
-                self.comparison_result.setText("比对结果: <无法比对>")
-                self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.fail_background_color))
+                # 未识别到有效图号：红色
+                self._set_status("状态: <无法比对>", self.status_error_bg)
+                # 结果区保持透明
+                self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
                 return
             
             # 在图像上绘制文本框
@@ -1043,11 +1055,14 @@ class MainWindow(QMainWindow):
             self.print_text_result.setText(f"架次号: {head_code or '<未检测到>'}")
             if main_code:
                 QApplication.clipboard().setText(main_code)
-                self._set_status("状态: 已自动复制图号到剪贴板", self.status_success_bg)
+                if self.MAIN_STRICT.fullmatch(main_code):
+                    self._set_status("状态: 已自动复制图号到剪贴板", self.status_success_bg)
+                else:
+                    self._set_status("状态: 图号位数与规范不一致，已复制", self.status_warning_bg)
                 if self.pass_sound.source().isValid():
                     self.pass_sound.play()
             else:
-                self._set_status("状态: 未检测到图号，未复制", self.status_warning_bg)
+                self._set_status("状态: 未检测到图号，未复制", self.status_error_bg)
 
             self.copy_head_button.setEnabled(bool(head_code))
 
@@ -1068,8 +1083,8 @@ class MainWindow(QMainWindow):
              QMessageBox.critical(self, "识别错误", f"处理摄像头帧时出错: {e}")
              self.label_text_result.setText("标牌文字: 错误")
              self.print_text_result.setText("喷码文字: 错误")
-             self.comparison_result.setText("比对结果: 错误")
-             self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.fail_background_color))
+             self._set_status("状态: 错误", self.status_error_bg)
+             self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
         finally:
              # Re-enable button only if camera is still running AND not paused
              if self.camera_running and not self.pause_camera_updates:
