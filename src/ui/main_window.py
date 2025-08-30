@@ -1066,14 +1066,15 @@ class MainWindow(QMainWindow):
 
             self.copy_head_button.setEnabled(bool(head_code))
 
-            # 保存记录到数据库（仅保存图号）
+            # 保存记录到数据库（保存带标注的图像）
             try:
+                from datetime import datetime
+                capture_dir = self._ensure_capture_dir()
+                filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                save_path = os.path.join(capture_dir, filename)
+                image_to_save = self._build_captured_image(self.cv_image, text_with_positions, main_code, head_code, main_box)
+                cv2.imwrite(save_path, image_to_save)
                 if main_code:
-                    from datetime import datetime
-                    capture_dir = self._ensure_capture_dir()
-                    filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-                    save_path = os.path.join(capture_dir, filename)
-                    cv2.imwrite(save_path, self.cv_image)
                     self.add_record(save_path, main_code, "", "copied")
             except Exception as e:
                 logger.error(f"Failed to save simplified camera record: {e}", exc_info=True)
@@ -1331,6 +1332,79 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             logger.warning(f"Failed to set status style: {e}")
+
+    def _build_captured_image(self, base_frame, text_with_positions, main_code, head_code, main_box):
+        """构建用于保存的带标注图像：
+        - 叠加所有文本框标注
+        - 高亮图号框
+        - 左上角绘制图号/架次号与时间信息
+        """
+        try:
+            image_to_save = base_frame.copy()
+            # 仅绘制绿色框，不在框边标注文字
+            try:
+                for item in text_with_positions or []:
+                    box = item[0]
+                    if isinstance(box, list) and len(box) == 4 and isinstance(box[0], list):
+                        pts = np.array(box, dtype=np.int32)
+                        cv2.polylines(image_to_save, [pts], isClosed=True, color=(0, 255, 0), thickness=2)
+                    elif isinstance(box, (list, tuple)) and len(box) == 4:
+                        x1, y1, x2, y2 = map(int, box)
+                        cv2.rectangle(image_to_save, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            except Exception:
+                pass
+
+            # 高亮图号框（绿色）
+            if main_box and isinstance(main_box, (list, tuple)):
+                try:
+                    if isinstance(main_box, list) and len(main_box) == 4 and isinstance(main_box[0], list):
+                        pts = np.array(main_box, dtype=np.int32)
+                        cv2.polylines(image_to_save, [pts], isClosed=True, color=(0, 255, 0), thickness=3)
+                    elif len(main_box) == 4:
+                        x1, y1, x2, y2 = map(int, main_box)
+                        cv2.rectangle(image_to_save, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                except Exception:
+                    pass
+
+            # 在左上角绘制结果信息
+            try:
+                # 使用 ASCII 标签，避免 OpenCV 字体无法渲染中文导致的问号
+                overlay_lines = [
+                    f"MAIN: {main_code or '<NONE>'}",
+                    f"HEAD: {head_code or '<NONE>'}"
+                ]
+                from datetime import datetime
+                overlay_lines.append(f"TIME: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                # 字体缩小约 30%，线条更细
+                scale = 0.42
+                thickness = 1
+                margin = 10
+                line_gap = 6
+
+                # 计算背景框大小
+                text_sizes = [cv2.getTextSize(t, font, scale, thickness)[0] for t in overlay_lines]
+                box_width = max(w for w, h in text_sizes) + margin * 2
+                box_height = sum(h for w, h in text_sizes) + margin * 2 + line_gap * (len(text_sizes) - 1)
+
+                # 背景与边框
+                cv2.rectangle(image_to_save, (5, 5), (5 + box_width, 5 + box_height), (255, 255, 255), cv2.FILLED)
+                cv2.rectangle(image_to_save, (5, 5), (5 + box_width, 5 + box_height), (0, 0, 0), 1)
+
+                # 绘制文字
+                x = 5 + margin
+                y = 5 + margin + text_sizes[0][1]
+                for idx, line in enumerate(overlay_lines):
+                    cv2.putText(image_to_save, line, (x, y), font, scale, (0, 0, 0), thickness, cv2.LINE_AA)
+                    if idx < len(overlay_lines) - 1:
+                        y += text_sizes[idx + 1][1] + line_gap
+            except Exception:
+                pass
+
+            return image_to_save
+        except Exception:
+            return base_frame
 
     def _normalize_and_validate(self, s: str) -> str:
         # 仅允许大写/数字/英文点，删除空格；去除尾点

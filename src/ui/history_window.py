@@ -43,9 +43,13 @@ class HistoryWindow(QDialog):
 
         # 操作区：多选操作 + 删除所选记录
         action_layout = QHBoxLayout()
-        self.delete_button = QPushButton("删除所选记录")
-        self.delete_button.setToolTip("删除选中的历史记录（不可恢复）")
-        self.delete_button.clicked.connect(self._delete_selected_rows)
+        self.delete_button = QPushButton("仅删记录")
+        self.delete_button.setToolTip("只从数据库删除所选记录，不删除本地图片")
+        self.delete_button.clicked.connect(lambda: self._delete_selected_rows(delete_files=False))
+
+        self.delete_with_files_button = QPushButton("删记录+文件")
+        self.delete_with_files_button.setToolTip("从数据库删除所选记录，并同时删除其对应的本地图片文件")
+        self.delete_with_files_button.clicked.connect(lambda: self._delete_selected_rows(delete_files=True))
         # 全选/全不选/反选
         self.select_all_button = QPushButton("全选")
         self.select_all_button.clicked.connect(lambda: self._set_all_checks(True))
@@ -57,6 +61,7 @@ class HistoryWindow(QDialog):
         action_layout.addWidget(self.select_none_button)
         action_layout.addWidget(self.invert_select_button)
         action_layout.addWidget(self.delete_button)
+        action_layout.addWidget(self.delete_with_files_button)
         action_layout.addStretch(1)
         self.layout.addLayout(action_layout)
 
@@ -155,7 +160,7 @@ class HistoryWindow(QDialog):
             self.history_table.setItem(row_idx, 5, similarity_item)
             self.history_table.setItem(row_idx, 6, result_item)
 
-    def _delete_selected_rows(self):
+    def _delete_selected_rows(self, delete_files: bool = False):
         # 优先按勾选行删除；若无勾选，则按表格选择行删除
         rows = self._get_checked_rows()
         if not rows:
@@ -164,6 +169,7 @@ class HistoryWindow(QDialog):
             QMessageBox.information(self, "提示", "请先选择要删除的记录")
             return
         keys = []
+        image_paths = []
         for r in rows:
             timestamp = self.history_table.item(r, 1).text() if self.history_table.item(r,1) else ""
             image_path = self.history_table.item(r, 2).text() if self.history_table.item(r,2) else ""
@@ -172,14 +178,27 @@ class HistoryWindow(QDialog):
             sign_text = sign_widget.toPlainText() if sign_widget else ""
             print_text = print_widget.toPlainText() if print_widget else ""
             keys.append((timestamp, image_path, sign_text, print_text))
+            image_paths.append(image_path)
 
-        confirm = QMessageBox.question(self, "确认删除", f"将删除 {len(rows)} 条记录，操作不可恢复，确定吗？")
+        tip = "同时删除本地文件" if delete_files else "仅删除记录"
+        confirm = QMessageBox.question(self, "确认删除", f"将{tip}：{len(rows)} 条，操作不可恢复，确定吗？")
         if confirm != QMessageBox.Yes:
             return
         try:
             delete_history_records(keys)
             for r in rows:
                 self.history_table.removeRow(r)
+            if delete_files:
+                removed, failed = 0, 0
+                for p in image_paths:
+                    try:
+                        if p and os.path.exists(p):
+                            os.remove(p)
+                            removed += 1
+                    except Exception:
+                        failed += 1
+                if failed:
+                    QMessageBox.warning(self, "文件删除部分失败", f"已删除 {removed} 张图片，{failed} 张删除失败。")
         except Exception as e:
             QMessageBox.critical(self, "删除失败", f"删除时出错：{e}")
 
