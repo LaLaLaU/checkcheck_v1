@@ -145,6 +145,8 @@ class MainWindow(QMainWindow):
         self.available_cameras = [] # List to store available camera indices
         self.selected_camera_index = 1 # Default/selected camera index
         self.current_mode = "相机识别" # Default mode
+        # 历史窗口实例（用于新增记录时自动刷新）
+        self.history_window = None
 
         # 最近一次识别到的架次号/图号
         self.detected_head_code = None
@@ -906,7 +908,7 @@ class MainWindow(QMainWindow):
                 self.image_label.setPixmap(pixmap)
 
             # 更新显示与复制
-            self.label_text_result.setText(f"图号: {main_code or '<未检测到>'}")
+            self._update_main_display(main_code)
             self.print_text_result.setText(f"架次号: {head_code or '<未检测到>'}")
             if main_code:
                 QApplication.clipboard().setText(main_code)
@@ -925,10 +927,11 @@ class MainWindow(QMainWindow):
             # 复制架次号按钮状态
             self.copy_head_button.setEnabled(bool(head_code))
 
-            # 保存记录（仅保存图号，可选）
+            # 保存记录（保存图号与架次号）
             try:
-                if main_code:
-                    self.add_record(self.image_path, main_code, "", "copied")
+                if self.image_path:
+                    self.add_record(self.image_path, main_code or "", head_code or "")
+                    self._refresh_history_window()
             except Exception as e:
                 logger.error(f"Failed to save simplified record: {e}", exc_info=True)
 
@@ -1051,7 +1054,7 @@ class MainWindow(QMainWindow):
                 self.result_preview_label.setPixmap(preview)
 
             # 更新UI显示与复制
-            self.label_text_result.setText(f"图号: {main_code or '<未检测到>'}")
+            self._update_main_display(main_code)
             self.print_text_result.setText(f"架次号: {head_code or '<未检测到>'}")
             if main_code:
                 QApplication.clipboard().setText(main_code)
@@ -1066,7 +1069,7 @@ class MainWindow(QMainWindow):
 
             self.copy_head_button.setEnabled(bool(head_code))
 
-            # 保存记录到数据库（保存带标注的图像）
+            # 保存记录到数据库（保存带标注的图像，以及图号/架次号）
             try:
                 from datetime import datetime
                 capture_dir = self._ensure_capture_dir()
@@ -1074,8 +1077,8 @@ class MainWindow(QMainWindow):
                 save_path = os.path.join(capture_dir, filename)
                 image_to_save = self._build_captured_image(self.cv_image, text_with_positions, main_code, head_code, main_box)
                 cv2.imwrite(save_path, image_to_save)
-                if main_code:
-                    self.add_record(save_path, main_code, "", "copied")
+                self.add_record(save_path, main_code or "", head_code or "")
+                self._refresh_history_window()
             except Exception as e:
                 logger.error(f"Failed to save simplified camera record: {e}", exc_info=True)
 
@@ -1263,8 +1266,8 @@ class MainWindow(QMainWindow):
 
             # --- Draw text only if coordinates were successfully extracted --- 
             if coordinates_extracted:
-                # Filter text to keep only ASCII characters
-                ascii_text = ''.join(char for char in text if ord(char) < 128).strip()
+                # Filter text to keep only ASCII characters and remove spaces
+                ascii_text = ''.join(char for char in text if ord(char) < 128 and char != ' ').strip()
                 
                 # Draw text only if there's something left after filtering
                 if ascii_text:
@@ -1332,6 +1335,76 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             logger.warning(f"Failed to set status style: {e}")
+
+    def _generate_main_highlight_html(self, code: str) -> str:
+        """当图号不符合严格规范时，返回带橙色高亮且加粗的HTML文本（从前往后定位第一处不合规并高亮其后所有字符）。"""
+        try:
+            if not code:
+                return "图号: <未检测到>"
+
+            orange = "#d97a00"
+            strict = self.MAIN_STRICT
+            # 若整体严格匹配则无需高亮
+            if strict.fullmatch(code):
+                return f"图号: {code}"
+
+            # 逐字符从前往后查找与严格模式的第一处不一致
+            # 做法：按段规则检查，定位第一处违规的起始索引，然后将该位置及其后续全部加粗橙色
+            def find_first_violation_index(text: str) -> int:
+                parts = text.split('.')
+                # 段数不为5，第一处违规为末尾（整体高亮）
+                if len(parts) != 5:
+                    return 0
+                idx = 0
+                # seg0: 3-5位，首字母，A-Z0-9
+                seg0 = parts[0]
+                if not (3 <= len(seg0) <= 5 and len(seg0) >= 1 and seg0[0].isalpha() and seg0.upper() == seg0 and seg0.isalnum()):
+                    return 0
+                idx += len(seg0) + 1
+                # seg1: 4位数字
+                seg1 = parts[1]
+                if not (len(seg1) == 4 and seg1.isdigit()):
+                    return idx - (len(seg1) + 1)  # 段起始位置
+                idx += len(seg1) + 1
+                # seg2: 1位大写字母
+                seg2 = parts[2]
+                if not (len(seg2) == 1 and seg2.isalpha() and seg2.upper() == seg2):
+                    return idx - (len(seg2) + 1)
+                idx += len(seg2) + 1
+                # seg3: 3位数字
+                seg3 = parts[3]
+                if not (len(seg3) == 3 and seg3.isdigit()):
+                    return idx - (len(seg3) + 1)
+                idx += len(seg3) + 1
+                # seg4: 3位数字
+                seg4 = parts[4]
+                if not (len(seg4) == 3 and seg4.isdigit()):
+                    return idx - (len(seg4) + 1)
+                # 如果以上都通过但整体仍非strict（例如尾点等），则从最后段后面开始高亮
+                return idx + len(seg4)
+
+            start = max(0, find_first_violation_index(code))
+            safe_start = min(start, len(code))
+            prefix = code[:safe_start]
+            suffix = code[safe_start:]
+            if suffix:
+                suffix = f'<span style="color:{orange}; font-weight:bold;">{suffix}</span>'
+            return f"图号: {prefix}{suffix}"
+        except Exception:
+            return f"图号: {code}"
+
+    def _update_main_display(self, main_code: str):
+        """根据严格/宽松匹配结果更新图号显示；宽松时对不合规片段橙色高亮。"""
+        try:
+            if not main_code:
+                self.label_text_result.setText("图号: <未检测到>")
+                return
+            if self.MAIN_STRICT.fullmatch(main_code):
+                self.label_text_result.setText(f"图号: {main_code}")
+            else:
+                self.label_text_result.setText(self._generate_main_highlight_html(main_code))
+        except Exception:
+            self.label_text_result.setText(f"图号: {main_code or '<未检测到>'}")
 
     def _build_captured_image(self, base_frame, text_with_positions, main_code, head_code, main_box):
         """构建用于保存的带标注图像：
@@ -1457,25 +1530,12 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("当前无可复制的架次号", 3000)
 
-    def add_record(self, image_path, sign_text, print_text, result_text):
-        """将识别结果保存到数据库"""
+    def add_record(self, image_path: str, main_code: str, head_code: str) -> bool:
+        """将识别结果保存到数据库（新结构：main_code/head_code）。"""
         try:
-            # 从比对结果中提取相似度
-            import re
-            similarity = 0.0
-            if "相似度:" in result_text:
-                match = re.search(r'相似度: (\d+)%', result_text)
-                if match:
-                    similarity = float(match.group(1)) / 100
-            
-            # 提取结果（通过/不通过）
-            # 更精确地判断是否通过，检查是否包含"✓ 通过"而不是仅检查"通过"
-            result = "通过" if "✓ 通过" in result_text else "不通过"
-            
-            # 调用数据库函数保存记录
             from src.utils.database_manager import add_history_record
-            add_history_record(image_path, sign_text, print_text, similarity, result)
-            logger.info(f"Record saved: {image_path}, {sign_text}, {print_text}, {similarity}, {result}")
+            add_history_record(image_path, main_code, head_code)
+            logger.info(f"Record saved: {image_path}, {main_code}, {head_code}")
             return True
         except Exception as e:
             logger.error(f"Failed to save record: {e}")
@@ -1489,10 +1549,26 @@ class MainWindow(QMainWindow):
 
     def _show_history_window(self):
         """Opens the history window dialog."""
-        # Check if an instance already exists to avoid multiple windows (optional)
-        # Or simply create a new modal dialog each time
-        history_dialog = HistoryWindow(self) # Pass parent for modality if desired
-        history_dialog.exec_() # Show as a modal dialog
+        # 使用常驻的模型对话框，便于新增记录后刷新
+        try:
+            if self.history_window is None:
+                self.history_window = HistoryWindow(self)
+            self.history_window.show()
+            self.history_window.raise_()
+            self.history_window.activateWindow()
+        except Exception:
+            try:
+                self.history_window = HistoryWindow(self)
+                self.history_window.show()
+            except Exception:
+                pass
+
+    def _refresh_history_window(self):
+        try:
+            if self.history_window and self.history_window.isVisible():
+                self.history_window.refresh_data()
+        except Exception:
+            pass
 
     def on_open_settings(self):
         """
