@@ -8,6 +8,17 @@ from datetime import datetime
 DB_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data'))
 DB_PATH = os.path.join(DB_DIR, 'history.db')
 
+def _connect():
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
+    try:
+        cur = conn.cursor()
+        cur.execute('PRAGMA journal_mode=WAL;')
+        cur.execute('PRAGMA synchronous=NORMAL;')
+        conn.commit()
+    except Exception:
+        pass
+    return conn
+
 def init_db():
     """Initializes the database. If old schema is detected, migrates to the new schema.
 
@@ -15,7 +26,7 @@ def init_db():
     """
     os.makedirs(DB_DIR, exist_ok=True)
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cursor = conn.cursor()
 
     # Create table if not exists (new schema)
@@ -64,7 +75,7 @@ def init_db():
 
 def add_history_record(image_path: str, main_code: str, head_code: str):
     """Adds a new record (timestamp, image_path, main_code, head_code)."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cursor = conn.cursor()
 
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -79,10 +90,10 @@ def add_history_record(image_path: str, main_code: str, head_code: str):
 
 def get_all_history():
     """Fetches all records (timestamp, image_path, main_code, head_code) newest first."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT timestamp, image_path, main_code, head_code FROM history ORDER BY timestamp DESC")
+    cursor.execute("SELECT timestamp, image_path, main_code, head_code FROM history ORDER BY id DESC")
     rows = cursor.fetchall()
 
     conn.close()
@@ -94,7 +105,7 @@ def delete_history_records(keys):
     """
     if not keys:
         return
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cursor = conn.cursor()
     try:
         for ts, img, main_code, head_code in keys:
@@ -110,7 +121,7 @@ def check_history_exists(main_code: str, head_code: str) -> bool:
     """Checks if a record with the exact same codes exists for latest image path is not required here.
     For compatibility, simply checks for any row with same codes in recent entries.
     """
-    conn = sqlite3.connect(DB_PATH)
+    conn = _connect()
     cursor = conn.cursor()
     cursor.execute('''
         SELECT 1 FROM history WHERE main_code = ? AND head_code = ? LIMIT 1

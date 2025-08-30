@@ -1073,7 +1073,8 @@ class MainWindow(QMainWindow):
             try:
                 from datetime import datetime
                 capture_dir = self._ensure_capture_dir()
-                filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                # 使用更高精度时间防止文件名冲突（同秒多次）
+                filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
                 save_path = os.path.join(capture_dir, filename)
                 image_to_save = self._build_captured_image(self.cv_image, text_with_positions, main_code, head_code, main_box)
                 cv2.imwrite(save_path, image_to_save)
@@ -1337,7 +1338,7 @@ class MainWindow(QMainWindow):
             logger.warning(f"Failed to set status style: {e}")
 
     def _generate_main_highlight_html(self, code: str) -> str:
-        """当图号不符合严格规范时，返回带橙色高亮且加粗的HTML文本（从前往后定位第一处不合规并高亮其后所有字符）。"""
+        """当图号不符合严格规范时，仅包裹第一个违规段为橙色加粗。"""
         try:
             if not code:
                 return "图号: <未检测到>"
@@ -1348,48 +1349,61 @@ class MainWindow(QMainWindow):
             if strict.fullmatch(code):
                 return f"图号: {code}"
 
-            # 逐字符从前往后查找与严格模式的第一处不一致
-            # 做法：按段规则检查，定位第一处违规的起始索引，然后将该位置及其后续全部加粗橙色
-            def find_first_violation_index(text: str) -> int:
-                parts = text.split('.')
-                # 段数不为5，第一处违规为末尾（整体高亮）
-                if len(parts) != 5:
-                    return 0
-                idx = 0
-                # seg0: 3-5位，首字母，A-Z0-9
-                seg0 = parts[0]
+            parts = code.split('.')
+
+            def wrap(seg: str) -> str:
+                return f'<span style="color:{orange}; font-weight:bold;">{seg}</span>'
+
+            # 逐段校验，找到第一个违规段的索引
+            def first_bad_index(parts_list):
+                # seg0
+                if len(parts_list) < 1:
+                    return -1
+                seg0 = parts_list[0]
                 if not (3 <= len(seg0) <= 5 and len(seg0) >= 1 and seg0[0].isalpha() and seg0.upper() == seg0 and seg0.isalnum()):
                     return 0
-                idx += len(seg0) + 1
-                # seg1: 4位数字
-                seg1 = parts[1]
+                # seg1
+                if len(parts_list) < 2:
+                    return len(parts_list) - 1
+                seg1 = parts_list[1]
                 if not (len(seg1) == 4 and seg1.isdigit()):
-                    return idx - (len(seg1) + 1)  # 段起始位置
-                idx += len(seg1) + 1
-                # seg2: 1位大写字母
-                seg2 = parts[2]
+                    return 1
+                # seg2
+                if len(parts_list) < 3:
+                    return len(parts_list) - 1
+                seg2 = parts_list[2]
                 if not (len(seg2) == 1 and seg2.isalpha() and seg2.upper() == seg2):
-                    return idx - (len(seg2) + 1)
-                idx += len(seg2) + 1
-                # seg3: 3位数字
-                seg3 = parts[3]
+                    return 2
+                # seg3
+                if len(parts_list) < 4:
+                    return len(parts_list) - 1
+                seg3 = parts_list[3]
                 if not (len(seg3) == 3 and seg3.isdigit()):
-                    return idx - (len(seg3) + 1)
-                idx += len(seg3) + 1
-                # seg4: 3位数字
-                seg4 = parts[4]
+                    return 3
+                # seg4
+                if len(parts_list) < 5:
+                    return len(parts_list) - 1
+                seg4 = parts_list[4]
                 if not (len(seg4) == 3 and seg4.isdigit()):
-                    return idx - (len(seg4) + 1)
-                # 如果以上都通过但整体仍非strict（例如尾点等），则从最后段后面开始高亮
-                return idx + len(seg4)
+                    return 4
+                # 额外多出的段，第一处即违规
+                if len(parts_list) > 5:
+                    return 5
+                return -1
 
-            start = max(0, find_first_violation_index(code))
-            safe_start = min(start, len(code))
-            prefix = code[:safe_start]
-            suffix = code[safe_start:]
-            if suffix:
-                suffix = f'<span style="color:{orange}; font-weight:bold;">{suffix}</span>'
-            return f"图号: {prefix}{suffix}"
+            bad_idx = first_bad_index(parts)
+            if bad_idx == -1:
+                return f"图号: {code}"
+
+            # 仅包裹违规段
+            highlighted_parts = []
+            for i, seg in enumerate(parts):
+                if i == bad_idx:
+                    highlighted_parts.append(wrap(seg))
+                else:
+                    highlighted_parts.append(seg)
+            html = '.'.join(highlighted_parts)
+            return f"图号: {html}"
         except Exception:
             return f"图号: {code}"
 
