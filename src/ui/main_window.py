@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-CheckCheck 导管喷码自动核对系统 - 主窗口
+CheckCheck 图号/架次号识别 - 主窗口
 
 此模块实现应用程序的主窗口，包括UI布局和基本功能。
 """
@@ -125,7 +125,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         
         # 设置窗口属性
-        self.setWindowTitle("CheckCheck - 导管喷码自动核对系统")
+        self.setWindowTitle("CheckCheck - 图号/架次号识别")
         self.setMinimumSize(1024, 768)
         # 默认高度放大50%，使相机与结果区初始显示更大
         self.resize(1024, 1152)
@@ -252,7 +252,7 @@ class MainWindow(QMainWindow):
         self.copy_head_button.clicked.connect(self.copy_head_to_clipboard)
 
         # 先放“架次号”行（上方）
-        # 将“喷码文字”替换为“架次号”，并把复制按钮放入同一容器
+        # 将“架次号文字”替换为“架次号”，并把复制按钮放入同一容器
         row_widget = QWidget()
         row_layout = QHBoxLayout(row_widget)
         row_layout.setContentsMargins(0, 0, 0, 0)
@@ -325,7 +325,7 @@ class MainWindow(QMainWindow):
 
         # 实时识别开关
         self.realtime_checkbox = QCheckBox(" 实时识别")
-        self.realtime_checkbox.setToolTip("开启后自动识别相机画面，有新标牌时自动输出结果")
+        self.realtime_checkbox.setToolTip("开启后自动识别相机画面，有新结果时自动输出结果")
         self.realtime_checkbox.setChecked(False)
         self.realtime_checkbox.toggled.connect(self.on_toggle_realtime)
         button_layout.addWidget(self.realtime_checkbox)
@@ -813,8 +813,8 @@ class MainWindow(QMainWindow):
 
     def clear_recognition_results(self):
         """清空识别结果框"""
-        self.label_text_result.setText("标牌文字: 等待识别...")
-        self.print_text_result.setText("喷码文字: 等待识别...")
+        self.label_text_result.setText("图号: 等待识别...")
+        self.print_text_result.setText("架次号: 等待识别...")
         self._set_status("状态: 等待识别...", self.status_warning_bg)
         # 结果区整体背景保持透明
         self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
@@ -851,8 +851,8 @@ class MainWindow(QMainWindow):
         self.recognize_button.setEnabled(False)
         self.upload_button.setEnabled(False) # Disable upload during recognition
         # Update result displays with 'processing' status
-        self.label_text_result.setText("标牌文字: [识别中...]")
-        self.print_text_result.setText("喷码文字: [识别中...]")
+        self.label_text_result.setText("图号: [识别中...]")
+        self.print_text_result.setText("架次号: [识别中...]")
         self._set_status("状态: [处理中...]", self.status_warning_bg)
         QApplication.processEvents() # Allow UI to update
 
@@ -938,8 +938,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error during static image recognition: {e}", exc_info=True)
             QMessageBox.critical(self, "识别错误", f"处理静态图像时出错: {e}")
-            self.label_text_result.setText("标牌文字: 错误")
-            self.print_text_result.setText("喷码文字: 错误")
+            self.label_text_result.setText("图号: 错误")
+            self.print_text_result.setText("架次号: 错误")
             self._set_status("状态: 错误", self.status_error_bg)
         finally:
             self.recognize_button.setEnabled(True) # Re-enable recognize button
@@ -976,10 +976,10 @@ class MainWindow(QMainWindow):
             
             # 如果没有识别到文本
             if not text_with_positions:
-                self.label_text_result.setText("标牌文字: <未识别到文本>")
-                self.print_text_result.setText("喷码文字: <未识别到文本>")
+                self.label_text_result.setText("图号: <未识别到文本>")
+                self.print_text_result.setText("架次号: <未识别到文本>")
                 # 未识别到有效图号：红色
-                self._set_status("状态: <无法比对>", self.status_error_bg)
+                self._set_status("状态: 未识别到文本", self.status_error_bg)
                 # 结果区保持透明
                 self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
                 return
@@ -1012,7 +1012,7 @@ class MainWindow(QMainWindow):
             # 按y坐标排序，区分上下文本
             text_with_positions.sort(key=lambda x: x[3])
             
-            # 假设上半部分是标牌文字，下半部分是喷码文字
+            # 假设上半部分是图号，下半部分是架次号
             # 计算中间分界线
             height = self.cv_image.shape[0]
             middle_y = height / 2
@@ -1029,12 +1029,12 @@ class MainWindow(QMainWindow):
             
             # 如果某一部分没有识别到文本，可能是图像问题或识别问题
             if not label_texts:
-                label_text = "<未识别到标牌文字>"
+                label_text = "<未识别到图号>"
             else:
                 label_text = " ".join(label_texts)
             
             if not print_texts:
-                print_text = "<未识别到喷码文字>"
+                print_text = "<未识别到架次号>"
             else:
                 print_text = " ".join(print_texts)
             
@@ -1086,8 +1086,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
              logger.error(f"Error during camera frame recognition: {e}", exc_info=True)
              QMessageBox.critical(self, "识别错误", f"处理摄像头帧时出错: {e}")
-             self.label_text_result.setText("标牌文字: 错误")
-             self.print_text_result.setText("喷码文字: 错误")
+             self.label_text_result.setText("图号: 错误")
+             self.print_text_result.setText("架次号: 错误")
              self._set_status("状态: 错误", self.status_error_bg)
              self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
         finally:
@@ -1220,8 +1220,8 @@ class MainWindow(QMainWindow):
         
         # 为不同类型的文本设置不同颜色
         colors = [
-            (0, 255, 0),    # 绿色 - 标牌文字
-            (0, 0, 255),    # 红色 - 喷码文字
+            (0, 255, 0),    # 绿色 - 图号
+            (0, 0, 255),    # 红色 - 架次号
             (255, 0, 0)     # 蓝色 - 其他文字
         ]
         
@@ -1457,8 +1457,8 @@ class MainWindow(QMainWindow):
             try:
                 # 使用 ASCII 标签，避免 OpenCV 字体无法渲染中文导致的问号
                 overlay_lines = [
-                    f"MAIN: {main_code or '<NONE>'}",
-                    f"HEAD: {head_code or '<NONE>'}"
+                    f"TUHAO: {main_code or '<NONE>'}",
+                    f"JIACI: {head_code or '<NONE>'}"
                 ]
                 from datetime import datetime
                 overlay_lines.append(f"TIME: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -1832,3 +1832,6 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         return super().eventFilter(obj, event)
+
+
+

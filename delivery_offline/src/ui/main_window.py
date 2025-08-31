@@ -20,7 +20,7 @@ from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader, QPalette, Q
 from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, QThread, QTimer, QUrl, QEvent
 from PyQt5.QtMultimedia import QSoundEffect
 from src.core.processor import ImageProcessor
-from src.utils.database_manager import init_db, add_history_record, check_history_exists
+from src.utils.database_manager import init_db
 from src.ui.history_window import HistoryWindow
 from src.workers.camera_worker import CameraWorker
 from src.utils.camera_utils import detect_available_cameras
@@ -183,8 +183,7 @@ class MainWindow(QMainWindow):
         # 自动启动摄像头
         self.start_camera()
 
-        # 实例化 TextComparator
-        self.text_comparator = TextComparator()
+        # 移除比较逻辑
 
         # 初始化音效
         self._init_sounds()
@@ -928,7 +927,7 @@ class MainWindow(QMainWindow):
             # 保存记录（仅保存图号，可选）
             try:
                 if main_code:
-                    self.add_record(self.image_path, main_code, "", "copied")
+                    self.add_record(self.image_path, main_code or "", head_code or "")
             except Exception as e:
                 logger.error(f"Failed to save simplified record: {e}", exc_info=True)
 
@@ -1050,8 +1049,11 @@ class MainWindow(QMainWindow):
                 preview = pixmap_marked.scaled(self.result_preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.result_preview_label.setPixmap(preview)
 
-            # 更新UI显示与复制
-            self.label_text_result.setText(f"图号: {main_code or '<未检测到>'}")
+            # 更新UI显示与复制（离线包加入违规段高亮）
+            try:
+                self.label_text_result.setText(self._generate_main_highlight_html(main_code) if main_code else "图号: <未检测到>")
+            except Exception:
+                self.label_text_result.setText(f"图号: {main_code or '<未检测到>'}")
             self.print_text_result.setText(f"架次号: {head_code or '<未检测到>'}")
             if main_code:
                 QApplication.clipboard().setText(main_code)
@@ -1070,12 +1072,12 @@ class MainWindow(QMainWindow):
             try:
                 from datetime import datetime
                 capture_dir = self._ensure_capture_dir()
-                filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
                 save_path = os.path.join(capture_dir, filename)
                 image_to_save = self._build_captured_image(self.cv_image, text_with_positions, main_code, head_code, main_box)
                 cv2.imwrite(save_path, image_to_save)
-                if main_code:
-                    self.add_record(save_path, main_code, "", "copied")
+                from src.utils.database_manager import add_history_record
+                add_history_record(save_path, main_code or "", head_code or "")
             except Exception as e:
                 logger.error(f"Failed to save simplified camera record: {e}", exc_info=True)
 
@@ -1263,8 +1265,8 @@ class MainWindow(QMainWindow):
 
             # --- Draw text only if coordinates were successfully extracted --- 
             if coordinates_extracted:
-                # Filter text to keep only ASCII characters
-                ascii_text = ''.join(char for char in text if ord(char) < 128).strip()
+                # Filter text to keep only ASCII characters and remove spaces
+                ascii_text = ''.join(char for char in text if ord(char) < 128 and char != ' ').strip()
                 
                 # Draw text only if there's something left after filtering
                 if ascii_text:
@@ -1332,6 +1334,56 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             logger.warning(f"Failed to set status style: {e}")
+
+    def _generate_main_highlight_html(self, code: str) -> str:
+        try:
+            if not code:
+                return "图号: <未检测到>"
+            orange = "#d97a00"
+            if self.MAIN_STRICT.fullmatch(code):
+                return f"图号: {code}"
+            parts = (code or "").split('.')
+            def wrap(seg: str) -> str:
+                return f'<span style="color:{orange}; font-weight:bold;">{seg}</span>'
+            def first_bad_index(parts_list):
+                if len(parts_list) < 1:
+                    return -1
+                seg0 = parts_list[0]
+                if not (3 <= len(seg0) <= 5 and len(seg0) >= 1 and seg0[0].isalpha() and seg0.upper() == seg0 and seg0.isalnum()):
+                    return 0
+                if len(parts_list) < 2:
+                    return len(parts_list) - 1
+                seg1 = parts_list[1]
+                if not (len(seg1) == 4 and seg1.isdigit()):
+                    return 1
+                if len(parts_list) < 3:
+                    return len(parts_list) - 1
+                seg2 = parts_list[2]
+                if not (len(seg2) == 1 and seg2.isalpha() and seg2.upper() == seg2):
+                    return 2
+                if len(parts_list) < 4:
+                    return len(parts_list) - 1
+                seg3 = parts_list[3]
+                if not (len(seg3) == 3 and seg3.isdigit()):
+                    return 3
+                if len(parts_list) < 5:
+                    return len(parts_list) - 1
+                seg4 = parts_list[4]
+                if not (len(seg4) == 3 and seg4.isdigit()):
+                    return 4
+                if len(parts_list) > 5:
+                    return 5
+                return -1
+            bad_idx = first_bad_index(parts)
+            if bad_idx == -1:
+                return f"图号: {code}"
+            highlighted_parts = []
+            for i, seg in enumerate(parts):
+                highlighted_parts.append(wrap(seg) if i == bad_idx else seg)
+            html = '.'.join(highlighted_parts)
+            return f"图号: {html}"
+        except Exception:
+            return f"图号: {code}"
 
     def _build_captured_image(self, base_frame, text_with_positions, main_code, head_code, main_box):
         """构建用于保存的带标注图像：

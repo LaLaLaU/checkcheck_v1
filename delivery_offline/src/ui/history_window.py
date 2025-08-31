@@ -10,7 +10,6 @@ from PyQt5.QtGui import QPixmap, QFont, QColor, QTextCursor, QTextCharFormat, QT
 
 # Import function to get history data
 from src.utils.database_manager import get_all_history, delete_history_records
-from src.core.text_comparator import TextComparator
 
 class HistoryWindow(QDialog):
     """Dialog window to display recognition history."""
@@ -19,7 +18,7 @@ class HistoryWindow(QDialog):
         self.setWindowTitle("识别历史记录")
         self.setMinimumSize(800, 400) # Set a minimum size
 
-        self.comparator = TextComparator()
+        # 比对逻辑已移除
 
         # --- Layouts --- 
         self.layout = QVBoxLayout(self)
@@ -76,7 +75,7 @@ class HistoryWindow(QDialog):
         self.layout.addWidget(self.history_table)
 
         # Define table columns（新增第0列：选择框）
-        self.column_headers = ["选择", "时间戳", "图片路径", "标牌文字", "喷码文字", "相似度", "结果"]
+        self.column_headers = ["选择", "时间戳", "图片路径", "图号", "架次号"]
         self.history_table.setColumnCount(len(self.column_headers))
         self.history_table.setHorizontalHeaderLabels(self.column_headers)
         
@@ -93,9 +92,7 @@ class HistoryWindow(QDialog):
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # 时间戳
         header.setSectionResizeMode(2, QHeaderView.Stretch)           # 图片路径
         header.setSectionResizeMode(3, QHeaderView.Stretch)           # 标牌文字
-        header.setSectionResizeMode(4, QHeaderView.Stretch)           # 喷码文字
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # 相似度
-        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # 结果
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # 架次号
 
         # Connect cell click signal
         self.history_table.cellClicked.connect(self._on_cell_clicked)
@@ -114,13 +111,6 @@ class HistoryWindow(QDialog):
         self.history_table.setRowCount(len(history_data))
 
         for row_idx, row_data in enumerate(history_data):
-            # Format similarity as percentage
-            try:
-                similarity_val = float(row_data[4])
-                similarity_str = f"{similarity_val:.2%}"
-            except (ValueError, TypeError):
-                similarity_str = str(row_data[4])
-            
             # 第0列：选择复选框
             select_item = QTableWidgetItem()
             select_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
@@ -136,29 +126,15 @@ class HistoryWindow(QDialog):
             image_path_item.setForeground(QColor('blue'))
             self.history_table.setItem(row_idx, 2, image_path_item)
 
-            sign_text_raw = str(row_data[2])
-            print_text_raw = str(row_data[3])
+            main_code = str(row_data[2])
+            head_code = str(row_data[3])
 
-            sign_html, print_html = self.comparator.format_diff_html(sign_text_raw, print_text_raw)
-
-            sign_text_edit = QTextEdit()
-            sign_text_edit.setReadOnly(True)
-            sign_text_edit.setHtml(sign_html)
-            sign_text_edit.setStyleSheet("QTextEdit { border: none; background-color: transparent; }")
-            self.history_table.setCellWidget(row_idx, 3, sign_text_edit)
-
-            print_text_edit = QTextEdit()
-            print_text_edit.setReadOnly(True)
-            print_text_edit.setHtml(print_html)
-            print_text_edit.setStyleSheet("QTextEdit { border: none; background-color: transparent; }")
-            self.history_table.setCellWidget(row_idx, 4, print_text_edit)
-
-            similarity_item = QTableWidgetItem(similarity_str)
-            result_item = QTableWidgetItem(str(row_data[5]))
+            main_item = QTableWidgetItem(main_code)
+            head_item = QTableWidgetItem(head_code)
 
             self.history_table.setItem(row_idx, 1, timestamp_item)
-            self.history_table.setItem(row_idx, 5, similarity_item)
-            self.history_table.setItem(row_idx, 6, result_item)
+            self.history_table.setItem(row_idx, 3, main_item)
+            self.history_table.setItem(row_idx, 4, head_item)
 
     def _delete_selected_rows(self, delete_files: bool = False):
         # 优先按勾选行删除；若无勾选，则按表格选择行删除
@@ -229,40 +205,22 @@ class HistoryWindow(QDialog):
         filter_text = self.filter_combo.currentText()
 
         for row in range(self.history_table.rowCount()):
-            sign_widget = self.history_table.cellWidget(row, 3)
-            print_widget = self.history_table.cellWidget(row, 4)
-            result_item = self.history_table.item(row, 6)
-
-            if not sign_widget or not print_widget or not result_item: # Should not happen
+            main_item = self.history_table.item(row, 3)
+            head_item = self.history_table.item(row, 4)
+            if not main_item or not head_item:
                 continue
 
-            sign_text = sign_widget.toPlainText().lower()
-            print_text = print_widget.toPlainText().lower()
-            result_text = result_item.text()
+            main_text = main_item.text().lower()
+            head_text = head_item.text().lower()
 
-            # Check search match
             search_match = (
                 not search_term or 
-                search_term in sign_text or 
-                search_term in print_text
+                search_term in main_text or 
+                search_term in head_text
             )
 
-            # Check filter match
-            filter_match = (
-                filter_text == '全部' or
-                filter_text == result_text
-            )
-
-            # Set row visibility
-            is_visible = search_match and filter_match
+            is_visible = search_match
             self.history_table.setRowHidden(row, not is_visible)
-
-            # Apply/clear highlight if row is visible
-            if is_visible:
-                self._highlight_text(row, self.search_input.text()) # Pass original case for highlighting
-            # No need to explicitly clear highlight if hidden, but good practice if shown
-            elif not is_visible and self.search_input.text(): # Ensure highlight clears if made visible again without search
-                 self._highlight_text(row, "")
 
     def _highlight_text(self, row_index, search_term):
         """Highlights occurrences of search_term in sign and print columns for a given row."""

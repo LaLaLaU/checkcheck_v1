@@ -73,3 +73,25 @@ $RECYCLE.BIN/
 # Project specific
 data/temp/
 *.log
+###############################################
+# Project-specific ignores (CheckCheck)
+###############################################
+# Offline delivery bundle and archives
+delivery_offline/
+delivery_offline.zip
+dist/
+*.tar.gz
+*.zip
+
+# Local OCR models (optional; code has fallback)
+ch_PP-OCRv4_det_infer/
+ch_PP-OCRv4_rec_infer/
+
+# Runtime data and captures
+captures/
+data/history.db
+
+# Dev tool artifacts
+.specstory/
+.cursor/
+.cursorindexingignore

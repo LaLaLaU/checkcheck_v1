@@ -1,7 +1,7 @@
 @echo off
-echo Starting CheckCheck System with conda environment...
+chcp 65001 >nul
+echo Starting CheckCheck in conda environment 'checkcheck'...
 
-REM Check if conda is installed
 where conda >nul 2>nul
 if %ERRORLEVEL% NEQ 0 (
     echo Conda is not installed or not in PATH.
@@ -10,10 +10,11 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-REM Set environment variable to allow duplicate OpenMP libraries
-set KMP_DUPLICATE_LIB_OK=TRUE
+set "KMP_DUPLICATE_LIB_OK=TRUE"
+set "PYTHONUTF8=1"
+set "QT_FONT_DPI=96"
+set "OMP_NUM_THREADS=1"
 
-REM Run the application using conda run command in the checkcheck environment
 conda run -n checkcheck python src/main.py
 if %ERRORLEVEL% NEQ 0 (
     echo Failed to run the application in conda environment.

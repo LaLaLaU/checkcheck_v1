@@ -1,9 +1,9 @@
-���߽�����ʹ��˵��
+离线包使用说明（UTF-8）
 ================================
-1) ������ delivery_offline �ļ��п�����Ŀ���Ӣ��·������ D:\checkcheck��
-2) ˫�� start_app.bat �������״λ��Զ����� conda-unpack �޸�����
-3) ����ʾȱ�� VC++ ���п⣬���Ȱ�װ VS 2015-2022 x64 ���п�
-4) ���޷�������ͷ��������ͼƬʶ����֤����Ϊ Win10 N ���谲װ Media Feature Pack
-5) �� CPU ֧�� AVX/AVX2������� CPU �����޷�����
-6) Ŀ¼���д��data\\history.db �� captures\\
-7) Ĭ�ϴ� CPU �����������Կ�������
+1) 将整个 `delivery_offline` 文件夹放到纯英文路径（例如 `D:\checkcheck`）。
+2) 首次运行：双击 `start_app.bat`，脚本会自动执行 `env\Scripts\conda-unpack.exe` 完成环境修复，然后启动应用。
+3) 若提示缺少 VC++ 运行库，请安装 “Microsoft Visual C++ 2015-2022 Redistributable (x64)”。
+4) 若系统为 Win10 N 且无法使用多媒体功能，请安装 “Media Feature Pack”。
+5) 建议 CPU 支持 AVX/AVX2；过旧 CPU 可能无法运行。
+6) 程序运行后，会在同目录生成 `data\history.db` 与 `captures\` 文件夹（可按需清理）。
+7) 默认使用 CPU 运行；如需 GPU 请自行配置对应的 Paddle 版本与驱动。
