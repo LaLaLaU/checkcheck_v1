@@ -1,164 +1,114 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-CheckCheck 导管喷码自动核对系统 - 区域检测模块
+CheckCheck 导管喷码自动核对系统 - 区域检测模块（离线优先）
 
-此模块负责自动检测图像中的标牌区域和喷码区域。
+- 显式使用本地 ch_PP-OCRv4_det_infer 检测模型
+- 禁用 angle_cls；不回退到联网下载
 """
 
+import os
+import sys
 import cv2
 import numpy as np
 from typing import Tuple, Dict, List, Optional
-from paddleocr import PaddleOCR # Import PaddleOCR
+from paddleocr import PaddleOCR
+
+
+def _candidate_dirs() -> list:
+    paths = []
+    env_dir = os.environ.get("CHECKCHECK_OCR_MODELS")
+    if env_dir:
+        paths.append(env_dir)
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass and os.path.isdir(meipass):
+        paths.append(meipass)
+    if getattr(sys, "frozen", False):
+        paths.append(os.path.dirname(sys.executable))
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    paths += [proj_root, os.getcwd()]
+    seen, ordered = set(), []
+    for p in paths:
+        if p and p not in seen:
+            ordered.append(p); seen.add(p)
+    return ordered
+
+
+def _find_det_model_dir() -> str:
+    for base in _candidate_dirs():
+        p = os.path.join(base, "ch_PP-OCRv4_det_infer")
+        if os.path.isdir(p):
+            return p
+    return ""
+
 
 class RegionDetector:
-    """
-    使用 PaddleOCR 检测器自动检测图像中的标牌区域和喷码区域
-    """
+    """使用 PaddleOCR 检测文本区域"""
+
     def __init__(self):
-        """
-        初始化区域检测器，使用PaddleOCR进行检测
-        """
-        print("Initializing PaddleOCR for detection...")
-        # 初始化 PaddleOCR，仅用于检测
-        # lang='ch' 支持中文和英文数字
-        # rec=False 禁用识别模块
-        # use_angle_cls=False 禁用角度分类
-        # use_gpu=False 暂时禁用GPU，确保兼容性
+        print("Initializing PaddleOCR for detection (offline-first)...")
 
-        # 使用相对路径初始化检测模型
-        import os
-        current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        det_model_path = os.path.join(current_dir, "ch_PP-OCRv4_det_infer")
-        
-        try:
-            # 检查检测模型目录是否存在
-            if not os.path.exists(det_model_path):
-                print(f"Warning: Detection model directory not found: {det_model_path}")
-                print("Falling back to default PaddleOCR detection model...")
-                # 使用默认检测模型
-                self.detector = PaddleOCR(
-                    lang='ch', 
-                    use_angle_cls=False, 
-                    use_gpu=False, 
-                    rec=False, 
-                    show_log=True
-                )
-                print("PaddleOCR detector initialized with default Chinese model")
-            else:
-                # 使用自定义检测模型
-                self.detector = PaddleOCR(
-                    det_model_dir=det_model_path,  # 使用相对路径的模型
-                    use_angle_cls=False,          # 通常检测模型不需要角度分类
-                    use_gpu=False,                # 根据硬件配置
-                    rec=False,                    # 禁用识别模块
-                    show_log=True                 # 开启日志
-                )
-                print(f"PaddleOCR detector initialized successfully with model from: {det_model_path}")
-        except Exception as e:
-            print(f"Error initializing PaddleOCR detector: {e}")
-            print("Falling back to default detection model...")
-            try:
-                self.detector = PaddleOCR(lang='ch', use_angle_cls=False, use_gpu=False, rec=False, show_log=True)
-                print("Successfully initialized with default detection model")
-            except Exception as fallback_e:
-                print(f"Failed to initialize fallback detection model: {fallback_e}")
-                self.detector = None
+        det_dir = _find_det_model_dir()
+        if not det_dir:
+            print("Error: local detection model directory not found (ch_PP-OCRv4_det_infer). Detection disabled.")
+            self.detector = None
+        else:
+            self.detector = PaddleOCR(
+                det_model_dir=det_dir,
+                use_angle_cls=False,
+                use_gpu=False,
+                rec=False,
+                show_log=False
+            )
+            print(f"PaddleOCR detector initialized with local model: {det_dir}")
 
-        # 可配置参数
-        self.min_textbox_area = 500   # 最终文本框的最小面积
-        self.max_textbox_area = 50000 # 最终文本框的最大面积
-        self.min_aspect_ratio = 1.5   # 最终文本框的最小长宽比
-        self.max_aspect_ratio = 20.0  # 最终文本框的最大长宽比
-        
-        # 可视化颜色
-        self.label_color = (0, 0, 255)  # Red for label
-        self.print_color = (0, 255, 0)  # Green for print
+        # 简单的过滤参数
+        self.min_textbox_area = 500
+        self.max_textbox_area = 50000
+        self.min_aspect_ratio = 1.5
+        self.max_aspect_ratio = 20.0
+
+        self.label_color = (0, 0, 255)
+        self.print_color = (0, 255, 0)
 
     def detect_regions(self, image: np.ndarray) -> Dict[str, Dict]:
-        """
-        检测图像中的标牌区域和喷码区域
-
-        Args:
-            image (np.ndarray): 输入图像
-
-        Returns:
-            Dict[str, Dict]: 包含检测到的区域信息，格式为：
-                {
-                    'label_region': {
-                        'bbox': (x, y, w, h),
-                        'image': 裁剪后的图像
-                    },
-                    'print_region': {
-                        'bbox': (x, y, w, h),
-                        'image': 裁剪后的图像
-                    }
-                }
-        """
         if self.detector is None:
             print("PaddleOCR detector not initialized.")
             return {}
 
-        # 使用PaddleOCR检测文本区域
         detected_bboxes = self._detect_text_regions(image)
-
-        # 如果未检测到区域，返回空结果
         if not detected_bboxes:
             return {}
 
-        # 对检测到的区域进行分类（标牌区域和喷码区域）
         label_bbox, print_bbox = self._classify_regions(image, detected_bboxes)
 
-        # 返回结果
-        result = {}
+        result: Dict[str, Dict] = {}
         if label_bbox:
             x, y, w, h = label_bbox
             result['label_region'] = {
                 'bbox': label_bbox,
-                'image': image[y:y+h, x:x+w].copy() # Use copy to avoid issues
+                'image': image[y:y+h, x:x+w].copy()
             }
-
         if print_bbox:
             x, y, w, h = print_bbox
             result['print_region'] = {
                 'bbox': print_bbox,
                 'image': image[y:y+h, x:x+w].copy()
             }
-
         return result
 
     def _detect_text_regions(self, image: np.ndarray) -> List[Tuple[int, int, int, int]]:
-        """
-        使用PaddleOCR检测器检测文本区域边界框
-
-        Args:
-            image (np.ndarray): 输入图像 (应为BGR格式)
-
-        Returns:
-            List[Tuple[int, int, int, int]]: 检测到的区域列表，每个区域为(x, y, w, h)
-        """
-        if self.detector is None:
-            return []
-
-        # PaddleOCR 需要 BGR 格式图像
-        # 确保输入是 BGR
-        img_for_detection = image.copy()
-        if len(img_for_detection.shape) == 2: # 如果是灰度图，转为 BGR
-            img_for_detection = cv2.cvtColor(img_for_detection, cv2.COLOR_GRAY2BGR)
-        elif img_for_detection.shape[2] == 4: # 如果是 BGRA，转为 BGR
-            img_for_detection = cv2.cvtColor(img_for_detection, cv2.COLOR_BGRA2BGR)
+        img = image.copy()
+        if len(img.shape) == 2:
+            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        elif img.shape[2] == 4:
+            img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 
         try:
-            # 执行检测
-            # det_res 是一个列表，包含检测到的所有文本框信息
-            # 每个文本框信息是一个包含四个顶点坐标的列表：[[[x1, y1], [x2, y2], [x3, y3], [x4, y4]], ...]
-            det_res = self.detector.ocr(img_for_detection, cls=False, rec=False)
-
-            bboxes = []
-            if det_res and det_res[0]: # 检查是否有检测结果
-                 for box_coords in det_res[0]:
-                    # box_coords is like [[x1, y1], [x2, y2], [x3, y3], [x4, y4]]
-                    # 将四个顶点坐标转换为水平边界框 (x, y, w, h)
+            det_res = self.detector.ocr(img, cls=False, rec=False)
+            bboxes: List[Tuple[int, int, int, int]] = []
+            if det_res and det_res[0]:
+                for box_coords in det_res[0]:
                     points = np.array(box_coords, dtype=np.int32)
                     x, y, w, h = cv2.boundingRect(points)
                     bboxes.append((x, y, w, h))
@@ -168,95 +118,44 @@ class RegionDetector:
             return []
 
     def _merge_overlapping_boxes(self, boxes: List[Tuple[int, int, int, int]]) -> List[Tuple[int, int, int, int]]:
-        """
-        合并重叠的矩形框 (暂时可能不需要，因为PaddleOCR检测通常是行级别的)
-        """
         if not boxes:
             return []
-        
-        # 按照x坐标排序
         boxes = sorted(boxes, key=lambda box: box[0])
-        
-        merged_boxes = [boxes[0]]
-        
+        merged = [boxes[0]]
         for box in boxes[1:]:
-            prev_box = merged_boxes[-1]
-            
-            # 检查是否有重叠
-            # 两个矩形重叠的条件：一个矩形的左边界小于另一个矩形的右边界，且一个矩形的上边界小于另一个矩形的下边界
-            if (prev_box[0] < box[0] + box[2] and 
-                box[0] < prev_box[0] + prev_box[2] and 
-                prev_box[1] < box[1] + box[3] and 
-                box[1] < prev_box[1] + prev_box[3]):
-                
-                # 计算合并后的矩形
-                x = min(prev_box[0], box[0])
-                y = min(prev_box[1], box[1])
-                w = max(prev_box[0] + prev_box[2], box[0] + box[2]) - x
-                h = max(prev_box[1] + prev_box[3], box[1] + box[3]) - y
-                
-                # 更新最后一个矩形
-                merged_boxes[-1] = (x, y, w, h)
+            x1, y1, w1, h1 = merged[-1]
+            x2, y2, w2, h2 = box
+            if (x1 < x2 + w2 and x2 < x1 + w1 and y1 < y2 + h2 and y2 < y1 + h1):
+                x = min(x1, x2)
+                y = min(y1, y2)
+                w = max(x1 + w1, x2 + w2) - x
+                h = max(y1 + h1, y2 + h2) - y
+                merged[-1] = (x, y, w, h)
             else:
-                # 如果没有重叠，添加新的矩形
-                merged_boxes.append(box)
-        
-        return merged_boxes
-    
+                merged.append(box)
+        return merged
+
     def _classify_regions(self, image: np.ndarray, regions: List[Tuple[int, int, int, int]]) -> Tuple[Optional[Tuple[int, int, int, int]], Optional[Tuple[int, int, int, int]]]:
-        """
-        对检测到的区域进行分类，识别哪个是标牌区域，哪个是喷码区域
-        (修改：基于位置进行初步分配，而非面积)
-        
-        Args:
-            image (np.ndarray): 原始图像
-            regions (List[Tuple[int, int, int, int]]): 检测到的区域列表 (应为合并后的)
-            
-        Returns:
-            Tuple[Optional[Tuple[int, int, int, int]], Optional[Tuple[int, int, int, int]]]: 
-                初步分配的标牌区域和喷码区域的坐标，如果未检测到足够区域则为None
-        """
         if not regions:
             return None, None
-        
-        # 按Y坐标（区域顶部）从上到下排序
-        regions = sorted(regions, key=lambda r: r[1])
-        
-        # 初步分配：顶部区域为标牌，次顶部区域为喷码
+        regions = sorted(regions, key=lambda r: r[1])  # 由上到下
         label_region = regions[0]
         print_region = regions[1] if len(regions) > 1 else None
-        
-        # 注意：这仍然是一个简化的假设，后续可能需要更复杂的逻辑
-        # 例如，基于文本内容、相对位置关系、尺寸比例等进行判断
-        
         return label_region, print_region
-    
+
     def visualize_regions(self, image: np.ndarray, regions: Dict) -> np.ndarray:
-        """
-        在图像上可视化检测到的区域和识别结果（如果提供）
+        vis = image.copy()
+        lr = regions.get('label_region')
+        pr = regions.get('print_region')
+        if lr and 'bbox' in lr:
+            x, y, w, h = lr['bbox']
+            cv2.rectangle(vis, (x, y), (x + w, y + h), self.label_color, 2)
+            label_text = lr.get('text', 'Label?')
+            cv2.putText(vis, label_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.0, self.label_color, 2)
+        if pr and 'bbox' in pr:
+            x, y, w, h = pr['bbox']
+            cv2.rectangle(vis, (x, y), (x + w, y + h), self.print_color, 2)
+            print_text = pr.get('text', 'Print?')
+            cv2.putText(vis, print_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.0, self.print_color, 2)
+        return vis
 
-        Args:
-            image (np.ndarray): 原始图像
-            regions (Dict): 检测和识别结果，格式同 process_image 返回值中的 'regions'
-
-        Returns:
-            np.ndarray: 可视化后的图像
-        """
-        vis_image = image.copy()
-
-        label_region_info = regions.get('label_region')
-        print_region_info = regions.get('print_region')
-
-        if label_region_info and 'bbox' in label_region_info:
-            x, y, w, h = label_region_info['bbox']
-            cv2.rectangle(vis_image, (x, y), (x + w, y + h), self.label_color, 2)
-            label_text = label_region_info.get('text', 'Label?') # Get text if available
-            cv2.putText(vis_image, label_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.0, self.label_color, 2)
-
-        if print_region_info and 'bbox' in print_region_info:
-            x, y, w, h = print_region_info['bbox']
-            cv2.rectangle(vis_image, (x, y), (x + w, y + h), self.print_color, 2)
-            print_text = print_region_info.get('text', 'Print?') # Get text if available
-            cv2.putText(vis_image, print_text, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.0, self.print_color, 2)
-
-        return vis_image

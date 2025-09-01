@@ -1188,8 +1188,34 @@ class MainWindow(QMainWindow):
 
         try:
             logger.info("Calling OCR processor...")
-            # 使用OCR处理器进行识别
-            results = self.ocr_processor.ocr(image_data, cls=True)
+            # 使用OCR处理器进行识别（禁用逐块角度分类）
+            results = self.ocr_processor.ocr(image_data, cls=False)
+
+            # 若结果为空或置信/规则不佳，自动进行整图180°重试
+            def _is_result_meaningful(res):
+                try:
+                    if not res or not res[0]:
+                        return False
+                    # 简单质量判定：存在至少一个置信度>0的条目
+                    for line in res[0]:
+                        if len(line) >= 2 and isinstance(line[1], tuple) and len(line[1]) >= 2:
+                            if float(line[1][1]) > 0:
+                                return True
+                    return False
+                except Exception:
+                    return False
+
+            if not _is_result_meaningful(results):
+                try:
+                    import cv2 as _cv2
+                    rotated = _cv2.rotate(image_data, _cv2.ROTATE_180)
+                    results_rot = self.ocr_processor.ocr(rotated, cls=False)
+                    # 如果旋转后的结果更“有意义”，则采用
+                    if _is_result_meaningful(results_rot):
+                        results = results_rot
+                        logger.info("Used 180° rotated OCR result as it was better.")
+                except Exception as _e:
+                    logger.warning(f"180° retry failed: {_e}")
             
             # 基本验证结果格式
             if results is None: 

@@ -1,177 +1,112 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-CheckCheck 导管喷码自动核对系统 - OCR引擎模块
+CheckCheck 导管喷码自动核对系统 - OCR引擎模块（离线优先）
 
-此模块负责使用PaddleOCR进行文字识别。
+- 显式使用本地 ch_PP-OCRv4_rec_infer 识别模型
+- 禁用 angle_cls（逐块方向分类）
+- 不再回退到联网下载的默认模型
 """
 
 import os
+import sys
 import cv2
 import numpy as np
-from typing import Dict, List, Tuple, Union, Optional
+from typing import Dict, List, Tuple
 from paddleocr import PaddleOCR
 
 
+def _candidate_dirs() -> list:
+    paths = []
+    env_dir = os.environ.get("CHECKCHECK_OCR_MODELS")
+    if env_dir:
+        paths.append(env_dir)
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass and os.path.isdir(meipass):
+        paths.append(meipass)
+    if getattr(sys, "frozen", False):
+        paths.append(os.path.dirname(sys.executable))
+    proj_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    paths += [proj_root, os.getcwd()]
+    seen, ordered = set(), []
+    for p in paths:
+        if p and p not in seen:
+            ordered.append(p); seen.add(p)
+    return ordered
+
+
+def _find_rec_model_dir() -> str:
+    for base in _candidate_dirs():
+        p = os.path.join(base, "ch_PP-OCRv4_rec_infer")
+        if os.path.isdir(p):
+            return p
+    return ""
+
+
 class OCREngine:
-    """
-    OCR引擎类，用于识别图像中的文字
-    """
-    
+    """OCR引擎类：对裁剪区域进行识别"""
+
     def __init__(self, use_gpu: bool = False):
-        """
-        初始化OCR引擎
-        
-        Args:
-            use_gpu (bool): 是否使用GPU加速，默认为False
-        """
-        # 初始化PaddleOCR - 使用相对路径
-        import os
-        current_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        rec_model_path = os.path.join(current_dir, "ch_PP-OCRv4_rec_infer")
-        
-        # 检查模型目录是否存在
-        if not os.path.exists(rec_model_path):
-            print(f"Warning: Recognition model directory not found: {rec_model_path}")
-            print("Falling back to default PaddleOCR model...")
-            # 使用默认模型
-            self.ocr = PaddleOCR(
-                use_angle_cls=True,  # 使用方向分类器
-                lang="ch",  # 中文模型
-                use_gpu=use_gpu,  # 是否使用GPU
-                show_log=True  # 开启日志
-            )
-            print("OCREngine initialized with default Chinese model")
+        rec_dir = _find_rec_model_dir()
+        if not rec_dir:
+            print("Error: local recognition model directory not found (ch_PP-OCRv4_rec_infer). OCR disabled.")
+            self.ocr = None
         else:
-            # 使用自定义模型，但不指定字典文件（让PaddleOCR使用默认字典）
             self.ocr = PaddleOCR(
-                use_angle_cls=True,           # 是否使用方向分类器
-                det=False,                    # 在OCREngine中，我们主要处理已裁剪区域，不执行检测
-                rec_model_dir=rec_model_path, # 指定识别模型路径
-                # rec_char_dict_path=rec_dict_path, # 移除字典路径，使用默认字典
+                use_angle_cls=False,
+                det=False,
+                rec_model_dir=rec_dir,
                 use_gpu=use_gpu,
-                show_log=True                 # 开启日志，方便调试模型加载
+                show_log=False
             )
-            print(f"OCREngine initialized with custom recognition model from: {rec_model_path}")
-        
-        # 配置参数
-        self.confidence_threshold = 0.7  # 置信度阈值
-        
+            print(f"OCREngine initialized with local recognition model: {rec_dir}")
+
+        self.confidence_threshold = 0.7
+
     def recognize_text(self, image: np.ndarray) -> Tuple[str, float, List]:
-        """
-        识别图像中的文字
-        
-        Args:
-            image (np.ndarray): 输入图像
-            
-        Returns:
-            Tuple[str, float, List]: 识别结果，包括:
-                - 识别的文本字符串
-                - 平均置信度
-                - 原始识别结果列表，每项包含文本和置信度
-        """
-        # 确保图像是BGR格式
         if len(image.shape) == 2:
             image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        
-        # 进行OCR识别
-        result = self.ocr.ocr(image, cls=True)
-        
-        # 处理结果
+        if self.ocr is None:
+            return "", 0.0, []
+
+        result = self.ocr.ocr(image, cls=False)
         if not result or not result[0]:
             return "", 0.0, []
-        
-        # 提取文本和置信度
-        texts = []
-        confidences = []
-        original_results = []
-        
+
+        texts, confidences, details = [], [], []
         for line in result[0]:
             text = line[1][0]
-            confidence = line[1][1]
-            
-            # 仅保留置信度高于阈值的结果
-            if confidence >= self.confidence_threshold:
+            conf = float(line[1][1])
+            if conf >= self.confidence_threshold:
                 texts.append(text)
-                confidences.append(confidence)
-                original_results.append((text, confidence))
-        
-        # 计算平均置信度
-        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-        
-        # 合并文本
-        full_text = " ".join(texts)
-        
-        return full_text, avg_confidence, original_results
-    
+                confidences.append(conf)
+                details.append((text, conf))
+
+        avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
+        return " ".join(texts), avg_conf, details
+
     def process_regions(self, regions: Dict[str, Dict]) -> Dict[str, Dict]:
-        """
-        处理检测到的区域，识别每个区域中的文字
-        
-        Args:
-            regions (Dict[str, Dict]): 检测到的区域信息
-            
-        Returns:
-            Dict[str, Dict]: 更新后的区域信息，包含OCR结果
-        """
         result = regions.copy()
-        
-        # 处理标牌区域
         if 'label_region' in result:
-            label_image = result['label_region']['image']
-            text, confidence, details = self.recognize_text(label_image)
-            result['label_region'].update({
-                'text': text,
-                'confidence': confidence,
-                'ocr_details': details
-            })
-        
-        # 处理喷码区域
+            text, conf, det = self.recognize_text(result['label_region']['image'])
+            result['label_region'].update({'text': text, 'confidence': conf, 'ocr_details': det})
         if 'print_region' in result:
-            print_image = result['print_region']['image']
-            text, confidence, details = self.recognize_text(print_image)
-            result['print_region'].update({
-                'text': text,
-                'confidence': confidence,
-                'ocr_details': details
-            })
-        
+            text, conf, det = self.recognize_text(result['print_region']['image'])
+            result['print_region'].update({'text': text, 'confidence': conf, 'ocr_details': det})
         return result
-    
+
     def preprocess_image(self, image: np.ndarray) -> np.ndarray:
-        """
-        预处理图像以提高OCR识别效果
-        
-        Args:
-            image (np.ndarray): 输入图像
-            
-        Returns:
-            np.ndarray: 预处理后的图像
-        """
-        # 转换为灰度图
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
             gray = image.copy()
-        
-        # 二值化
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        # 降噪
         denoised = cv2.fastNlMeansDenoising(binary, None, 10, 7, 21)
-        
-        # 锐化
         kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
-        sharpened = cv2.filter2D(denoised, -1, kernel)
-        
-        return sharpened
-    
+        return cv2.filter2D(denoised, -1, kernel)
+
     def set_confidence_threshold(self, threshold: float) -> None:
-        """
-        设置置信度阈值
-        
-        Args:
-            threshold (float): 新的置信度阈值，范围为0到1
-        """
         if 0 <= threshold <= 1:
             self.confidence_threshold = threshold
+
+
