@@ -11,6 +11,9 @@ rem Runtime tweaks
 set KMP_DUPLICATE_LIB_OK=TRUE
 set QT_FONT_DPI=96
 
+rem Force OCR to use local model folders under current directory
+set CHECKCHECK_OCR_MODELS=%CD%
+
 if exist env\Scripts\conda-unpack.exe env\Scripts\conda-unpack.exe
 
 env\python.exe src\main.py

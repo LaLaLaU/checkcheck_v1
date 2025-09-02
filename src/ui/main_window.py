@@ -19,7 +19,6 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader, QPalette, QColor, QKeySequence
 from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, QThread, QTimer, QUrl, QEvent
 from PyQt5.QtMultimedia import QSoundEffect
-from src.core.processor import ImageProcessor
 from src.utils.database_manager import init_db, add_history_record, check_history_exists
 from src.ui.history_window import HistoryWindow
 from src.workers.camera_worker import CameraWorker
@@ -134,7 +133,6 @@ class MainWindow(QMainWindow):
         self.image_path = None
         self.current_image = None # QPixmap from loaded file
         self.cv_image = None      # OpenCV format image (from file or camera)
-        self.processor = None     # 图像处理器
         self.processing_result = None  # 处理结果
         self.camera_thread = None      # Thread for camera worker
         self.camera_worker = None      # Worker for camera capture
@@ -176,8 +174,6 @@ class MainWindow(QMainWindow):
         # 设置UI
         self._setup_ui()
         
-        # 初始化图像处理器
-        self._init_processor()
         # 初始化OCR处理器
         self._init_ocr_processor()
         # 初始化相机（但不启动）
@@ -422,25 +418,6 @@ class MainWindow(QMainWindow):
         # 绑定鼠标中键：在主窗口任意位置按下鼠标中键，触发开始识别
         self.installEventFilter(self)
 
-    def _init_processor(self):
-        """
-        初始化图像处理器
-        """
-        # 创建进度对话框
-        progress = QProgressDialog("正在初始化OCR引擎...", None, 0, 0, self)
-        progress.setWindowTitle("初始化中")
-        progress.setWindowModality(Qt.WindowModal)
-        progress.show()
-        QApplication.processEvents()
-        
-        # 初始化图像处理器
-        try:
-            self.processor = ImageProcessor(use_gpu=False)
-            progress.close()
-        except Exception as e:
-            progress.close()
-            QMessageBox.critical(self, "错误", f"初始化OCR引擎失败: {str(e)}")
-        
     def _init_ocr_processor(self):
         """Initialize the OCR processor."""
         if PaddleOcrProcessor:

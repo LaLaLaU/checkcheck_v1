@@ -15,6 +15,9 @@ set "PYTHONUTF8=1"
 set "QT_FONT_DPI=96"
 set "OMP_NUM_THREADS=1"
 
+rem Force OCR to use local model folders under current directory
+set "CHECKCHECK_OCR_MODELS=%CD%"
+
 conda run -n checkcheck python src/main.py
 if %ERRORLEVEL% NEQ 0 (
     echo Failed to run the application in conda environment.
