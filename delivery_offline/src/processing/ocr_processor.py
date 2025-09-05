@@ -60,6 +60,33 @@ def _find_local_model_dirs() -> tuple:
             return det_dir, rec_dir
     return None, None
 
+def _prepare_dummy_cls_dir() -> str:
+    """
+    准备一个本地的“伪”cls模型目录，放置空的 inference.pdmodel 与 inference.pdiparams 文件，
+    以绕过 PaddleOCR 在初始化阶段对 cls 模型的强制下载检查。
+    """
+    for base in _candidate_model_dirs():
+        try:
+            dummy_dir = os.path.join(base, "_cls_dummy_infer")
+            os.makedirs(dummy_dir, exist_ok=True)
+            for fname in ("inference.pdmodel", "inference.pdiparams"):
+                fpath = os.path.join(dummy_dir, fname)
+                if not os.path.exists(fpath):
+                    with open(fpath, "wb") as _f:
+                        _f.write(b"")
+            return dummy_dir
+        except Exception:
+            continue
+    # 兜底：放在当前工作目录
+    fallback = os.path.join(os.getcwd(), "_cls_dummy_infer")
+    os.makedirs(fallback, exist_ok=True)
+    for fname in ("inference.pdmodel", "inference.pdiparams"):
+        fpath = os.path.join(fallback, fname)
+        if not os.path.exists(fpath):
+            with open(fpath, "wb") as _f:
+                _f.write(b"")
+    return fallback
+
 
 class PaddleOcrProcessor:
     """
@@ -84,6 +111,7 @@ class PaddleOcrProcessor:
                     use_angle_cls=False,
                     det_model_dir=det_dir,
                     rec_model_dir=rec_dir,
+                    cls_model_dir=_prepare_dummy_cls_dir(),
                     lang=lang,
                     use_gpu=use_gpu,
                     show_log=False
@@ -93,6 +121,7 @@ class PaddleOcrProcessor:
                 logger.warning("Local OCR model directories not found. Falling back to default PaddleOCR config. This may attempt network downloads.")
                 self.ocr_engine = PaddleOCR(
                     use_angle_cls=False,
+                    cls_model_dir=_prepare_dummy_cls_dir(),
                     lang=lang,
                     use_gpu=use_gpu,
                     show_log=False

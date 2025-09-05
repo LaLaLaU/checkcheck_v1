@@ -42,6 +42,29 @@ def _find_rec_model_dir() -> str:
             return p
     return ""
 
+def _prepare_dummy_infer_dir(name: str = "_dummy_infer") -> str:
+    """创建包含空 inference 文件的占位目录，以阻止 PaddleOCR 下载对应模型。"""
+    for base in _candidate_dirs():
+        try:
+            dummy = os.path.join(base, name)
+            os.makedirs(dummy, exist_ok=True)
+            for fname in ("inference.pdmodel", "inference.pdiparams"):
+                fpath = os.path.join(dummy, fname)
+                if not os.path.exists(fpath):
+                    with open(fpath, "wb") as f:
+                        f.write(b"")
+            return dummy
+        except Exception:
+            continue
+    fallback = os.path.join(os.getcwd(), name)
+    os.makedirs(fallback, exist_ok=True)
+    for fname in ("inference.pdmodel", "inference.pdiparams"):
+        fpath = os.path.join(fallback, fname)
+        if not os.path.exists(fpath):
+            with open(fpath, "wb") as f:
+                f.write(b"")
+    return fallback
+
 
 class OCREngine:
     """OCR引擎类：对裁剪区域进行识别"""
@@ -55,7 +78,9 @@ class OCREngine:
             self.ocr = PaddleOCR(
                 use_angle_cls=False,
                 det=False,
+                det_model_dir=_prepare_dummy_infer_dir("_det_dummy_infer"),
                 rec_model_dir=rec_dir,
+                cls_model_dir=_prepare_dummy_infer_dir("_cls_dummy_infer"),
                 use_gpu=use_gpu,
                 show_log=False
             )

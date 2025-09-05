@@ -41,6 +41,29 @@ def _find_det_model_dir() -> str:
             return p
     return ""
 
+def _prepare_dummy_infer_dir(name: str = "_dummy_infer") -> str:
+    """创建包含空 inference 文件的占位目录，以阻止 PaddleOCR 下载对应模型。"""
+    for base in _candidate_dirs():
+        try:
+            dummy = os.path.join(base, name)
+            os.makedirs(dummy, exist_ok=True)
+            for fname in ("inference.pdmodel", "inference.pdiparams"):
+                fpath = os.path.join(dummy, fname)
+                if not os.path.exists(fpath):
+                    with open(fpath, "wb") as f:
+                        f.write(b"")
+            return dummy
+        except Exception:
+            continue
+    fallback = os.path.join(os.getcwd(), name)
+    os.makedirs(fallback, exist_ok=True)
+    for fname in ("inference.pdmodel", "inference.pdiparams"):
+        fpath = os.path.join(fallback, fname)
+        if not os.path.exists(fpath):
+            with open(fpath, "wb") as f:
+                f.write(b"")
+    return fallback
+
 
 class RegionDetector:
     """使用 PaddleOCR 检测文本区域"""
@@ -58,6 +81,8 @@ class RegionDetector:
                 use_angle_cls=False,
                 use_gpu=False,
                 rec=False,
+                rec_model_dir=_prepare_dummy_infer_dir("_rec_dummy_infer"),
+                cls_model_dir=_prepare_dummy_infer_dir("_cls_dummy_infer"),
                 show_log=False
             )
             print(f"PaddleOCR detector initialized with local model: {det_dir}")
