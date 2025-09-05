@@ -14,7 +14,14 @@ set QT_FONT_DPI=96
 rem Force OCR to use local model folders under current directory
 set CHECKCHECK_OCR_MODELS=%CD%
 
-if exist env\Scripts\conda-unpack.exe env\Scripts\conda-unpack.exe
+if exist env\Scripts\conda-unpack.exe (
+    if not exist env\.unpacked (
+        env\Scripts\conda-unpack.exe >nul 2>&1
+        if %ERRORLEVEL% EQU 0 (
+            echo ok>env\.unpacked
+        )
+    )
+)
 
 env\python.exe src\main.py
 

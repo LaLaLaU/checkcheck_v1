@@ -787,8 +787,8 @@ class MainWindow(QMainWindow):
 
     def clear_recognition_results(self):
         """清空识别结果框"""
-        self.label_text_result.setText("标牌文字: 等待识别...")
-        self.print_text_result.setText("喷码文字: 等待识别...")
+        self.label_text_result.setText("图号: 等待识别...")
+        self.print_text_result.setText("架次号: 等待识别...")
         self._set_status("状态: 等待识别...", self.status_warning_bg)
         # 结果区整体背景保持透明
         self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
@@ -825,8 +825,8 @@ class MainWindow(QMainWindow):
         self.recognize_button.setEnabled(False)
         self.upload_button.setEnabled(False) # Disable upload during recognition
         # Update result displays with 'processing' status
-        self.label_text_result.setText("标牌文字: [识别中...]")
-        self.print_text_result.setText("喷码文字: [识别中...]")
+        self.label_text_result.setText("图号: [识别中...]")
+        self.print_text_result.setText("架次号: [识别中...]")
         self._set_status("状态: [处理中...]", self.status_warning_bg)
         QApplication.processEvents() # Allow UI to update
 
@@ -911,8 +911,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Error during static image recognition: {e}", exc_info=True)
             QMessageBox.critical(self, "识别错误", f"处理静态图像时出错: {e}")
-            self.label_text_result.setText("标牌文字: 错误")
-            self.print_text_result.setText("喷码文字: 错误")
+            self.label_text_result.setText("图号: 错误")
+            self.print_text_result.setText("架次号: 错误")
             self._set_status("状态: 错误", self.status_error_bg)
         finally:
             self.recognize_button.setEnabled(True) # Re-enable recognize button
@@ -949,10 +949,10 @@ class MainWindow(QMainWindow):
             
             # 如果没有识别到文本
             if not text_with_positions:
-                self.label_text_result.setText("标牌文字: <未识别到文本>")
-                self.print_text_result.setText("喷码文字: <未识别到文本>")
-                # 未识别到有效图号：红色
-                self._set_status("状态: <无法比对>", self.status_error_bg)
+                self.label_text_result.setText("图号: <未识别到文本>")
+                self.print_text_result.setText("架次号: <未识别到文本>")
+                # 未识别到有效文本
+                self._set_status("状态: 未识别到文本", self.status_error_bg)
                 # 结果区保持透明
                 self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
                 return
@@ -1002,12 +1002,12 @@ class MainWindow(QMainWindow):
             
             # 如果某一部分没有识别到文本，可能是图像问题或识别问题
             if not label_texts:
-                label_text = "<未识别到标牌文字>"
+                label_text = "<未识别到图号>"
             else:
                 label_text = " ".join(label_texts)
             
             if not print_texts:
-                print_text = "<未识别到喷码文字>"
+                print_text = "<未识别到架次号>"
             else:
                 print_text = " ".join(print_texts)
             
@@ -1061,8 +1061,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
              logger.error(f"Error during camera frame recognition: {e}", exc_info=True)
              QMessageBox.critical(self, "识别错误", f"处理摄像头帧时出错: {e}")
-             self.label_text_result.setText("标牌文字: 错误")
-             self.print_text_result.setText("喷码文字: 错误")
+             self.label_text_result.setText("图号: 错误")
+             self.print_text_result.setText("架次号: 错误")
              self._set_status("状态: 错误", self.status_error_bg)
              self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
         finally:
@@ -1219,8 +1219,8 @@ class MainWindow(QMainWindow):
         
         # 为不同类型的文本设置不同颜色
         colors = [
-            (0, 255, 0),    # 绿色 - 标牌文字
-            (0, 0, 255),    # 红色 - 喷码文字
+            (0, 255, 0),    # 绿色 - 图号
+            (0, 0, 255),    # 红色 - 架次号
             (255, 0, 0)     # 蓝色 - 其他文字
         ]
         
@@ -1423,8 +1423,8 @@ class MainWindow(QMainWindow):
             try:
                 # 使用 ASCII 标签，避免 OpenCV 字体无法渲染中文导致的问号
                 overlay_lines = [
-                    f"MAIN: {main_code or '<NONE>'}",
-                    f"HEAD: {head_code or '<NONE>'}"
+                    f"TUHAO: {main_code or '<NONE>'}",
+                    f"JIACI: {head_code or '<NONE>'}"
                 ]
                 from datetime import datetime
                 overlay_lines.append(f"TIME: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -1510,25 +1510,12 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("当前无可复制的架次号", 3000)
 
-    def add_record(self, image_path, sign_text, print_text, result_text):
-        """将识别结果保存到数据库"""
+    def add_record(self, image_path: str, main_code: str, head_code: str) -> bool:
+        """将识别结果保存到数据库（新结构：main_code/head_code）。"""
         try:
-            # 从比对结果中提取相似度
-            import re
-            similarity = 0.0
-            if "相似度:" in result_text:
-                match = re.search(r'相似度: (\d+)%', result_text)
-                if match:
-                    similarity = float(match.group(1)) / 100
-            
-            # 提取结果（通过/不通过）
-            # 更精确地判断是否通过，检查是否包含"✓ 通过"而不是仅检查"通过"
-            result = "通过" if "✓ 通过" in result_text else "不通过"
-            
-            # 调用数据库函数保存记录
             from src.utils.database_manager import add_history_record
-            add_history_record(image_path, sign_text, print_text, similarity, result)
-            logger.info(f"Record saved: {image_path}, {sign_text}, {print_text}, {similarity}, {result}")
+            add_history_record(image_path, main_code, head_code)
+            logger.info(f"Record saved: {image_path}, {main_code}, {head_code}")
             return True
         except Exception as e:
             logger.error(f"Failed to save record: {e}")

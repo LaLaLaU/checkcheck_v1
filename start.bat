@@ -6,8 +6,11 @@ cd /d "%~dp0"
 rem Basic runtime environment tweaks
 set "KMP_DUPLICATE_LIB_OK=TRUE"
 set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
 set "QT_FONT_DPI=96"
 set "OMP_NUM_THREADS=1"
+rem Force OCR to use local model folders under current directory
+set "CHECKCHECK_OCR_MODELS=%CD%"
 
 rem 1) Prefer bundled offline environment if present
 if exist "delivery_offline\env\python.exe" (
