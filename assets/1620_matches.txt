@@ -1,0 +1,80 @@
+often customers specify for packages, products, or printed materials. Our 
+• Parts and supplies.
+Chapter 3 — Main Parts
+How to Configure the Serial Port. . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4–13
+How to Configure Ethernet Port  . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4–14
+High Speed Remote Data Transfer  . . . . . . . . . . . . . . . . . . . . . . . . . . . 4–15
+Parts/tools Requirement . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 6–2
+elevated line speeds on consumer and industrial products. The printer delivers 
+Operator Manual helps the user to understand the different parts and different 
+Main Parts
+Describes the main parts of the printer.
+eliminate potential defects and hazards in our products.
+cleaning fluid vapor may cause drowsiness and/or effects similar to 
+Main Parts
+Figure 3-1: Main Parts of the Printer
+The electronics compartment contains the parts shown in Figure 3-4.
+and contains the following parts:
+COMMS RS232
+Ethernet
+Table 3-1: Connector Panel Ports
+9. Ethernet
+11. COMMS RS232
+Ethernet
+COMMS RS232
+• Configure serial port
+• Configure ethernet port
+• High speed remote data transfer
+The printer turns on the ink and the ink jet starts.
+the printer operation data and allows remote access to the data.
+The product counter shows the total number of products that the printer 
+has detected. All detected products are counted here including the 
+products on which the printer has not printed a message.
+How to Configure the Serial Port
+The RS-232 and RS-485 serial communication ports are standard for 
+You can prepare the printer communication ports for the transmission of 
+data logging information between the port and a remote device.
+ How to Configure the Serial Port     4-13
+2 Select Serial Port Configuration option, and press the Enter key. The 
+Configure Serial Ports dialog box appears (see Figure 4-21).
+Figure 4-21: Configure Serial Ports Dialog Box
+Sets the baud rate for transmission to remote devices
+How to Configure Ethernet Port
+4-14     How to Configure Ethernet Port
+High Speed Remote Data Transfer
+Send variable data. You can have 10 remote data inserts in 
+Alerts
+ High Speed Remote Data Transfer     4-15
+Serial Number
+Enter the serial number of the printer.
+Print ACK ASCII 
+Sets the ASCII character code (0 to 255) sent to the 
+Remote Source 
+and regular intervals of time on continuous products, this option is useful.
+DIN printing inverts and reverses alternate prints, so that the message can 
+• When you select a Remote description, the New Field dialog box with 
+This feature protects the printer from the 
+This method starts without a flushing sequence, 
+Selects the photocell source to be used. Opens 
+Serial Port 
+You can configure the serial port. For more 
+information refer “How to Configure the Serial 
+Selects DIN printing and traversing printing.
+Note: The printer automatically selects the best configuration from the message 
+When selected ON the printer automatically selects the 
+• Remote
+Note: The first week of the year starts with a week 
+• Serially loaded data
+• Remote (refer to “To Add Remote” on page 5-49)
+Normal text is a fixed text string that is used when you insert the serial data.
+reaches the roll over day. You can format the pull week date inserts using any of 
+The counters (serializers) are fields that change their value by a fixed amount. 
+example, counters help to print different serial number on each product that passes 
+system automatically selects the type of counter from the start, current and 
+The value from where the count starts. When the value 
+To Add Remote
+Sets the number of characters into the message ASCII string through either
+• RS232
+• Ethernet
+The editor automatically selects the block of text that you enter. This feature is 
+Inverts the colour to black or white for opaque printing. 
