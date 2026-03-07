@@ -1,0 +1,24 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local runtime and environment
+env/
+.venv/
+.tmp/
+.deps/
+
+# Local data
+data/history.db
+data/config.json
+
+# OCR model assets (do not version)
+ch_PP-OCRv4_det_infer/
+ch_PP-OCRv4_rec_infer/
+_cls_dummy_infer/
+
+# Build/dist artifacts
+build/
+dist/
