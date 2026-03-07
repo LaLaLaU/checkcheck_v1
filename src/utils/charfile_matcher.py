@@ -45,6 +45,12 @@ _RUNTIME_CACHE_KEY: Optional[Tuple[str, bool, bool, float]] = None
 _RUNTIME_CACHE_VALUE: Optional["RuntimeIndex"] = None
 
 
+def clear_runtime_cache() -> None:
+    global _RUNTIME_CACHE_KEY, _RUNTIME_CACHE_VALUE
+    _RUNTIME_CACHE_KEY = None
+    _RUNTIME_CACHE_VALUE = None
+
+
 def _safe_resolve(path_like: Optional[str]) -> Path:
     p = Path(path_like or "")
     try:

@@ -110,15 +110,46 @@ class VendorUIDriver:
     # --- app/window ---
     def ensure_app(self) -> None:
         print(f"[drv][{self._ts()}] ensure_app: title_re={self.cfg.title_re} exe={self.cfg.exe_path}")
+        connected = False
+        last_err: Optional[Exception] = None
+
+        # 1) Prefer attaching to an already running window by title.
         try:
             self.app = Application(backend="win32").connect(title_re=self.cfg.title_re, timeout=3)
-        except Exception:
+            connected = True
+            print(f"[drv][{self._ts()}] ensure_app: connected by title_re")
+        except Exception as e:
+            last_err = e
+
+        # 2) Fallback: attach by executable path if provided.
+        if (not connected) and self.cfg.exe_path:
+            try:
+                self.app = Application(backend="win32").connect(path=self.cfg.exe_path, timeout=2)
+                connected = True
+                print(f"[drv][{self._ts()}] ensure_app: connected by exe_path")
+            except Exception as e:
+                last_err = e
+
+        # 3) Last resort: start a new instance.
+        if not connected:
             if not self.cfg.exe_path:
                 raise RuntimeError("exe_path not set, and no running window found")
             self.app = Application(backend="win32").start(self.cfg.exe_path)
             self._sleep(1.0)
-        self.win = self.app.window(title_re=self.cfg.title_re)
-        self.win.wait("ready", timeout=15)
+            print(f"[drv][{self._ts()}] ensure_app: started new instance")
+
+        # Resolve main window: prefer title_re, fallback to top window.
+        try:
+            self.win = self.app.window(title_re=self.cfg.title_re)
+            self.win.wait("ready", timeout=15)
+        except Exception:
+            try:
+                self.win = self.app.top_window()
+                self.win.wait("ready", timeout=15)
+            except Exception as e:
+                if last_err is not None:
+                    raise RuntimeError(f"failed to resolve vendor window: {last_err}") from e
+                raise
         try:
             self.win.set_focus()
         except Exception:

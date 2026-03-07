@@ -151,6 +151,9 @@ class MainWindow(QMainWindow):
         # 字符文件匹配状态
         self.matched_char_file = None
         self.matched_char_score = 0.0
+        # 识别命中后自动唤起喷码软件（同一图号+文件仅触发一次）
+        self.auto_open_charfile_on_match = True
+        self._last_auto_open_signature = None
 
         # 编译正则：架次号与图号
         self.HEAD_REGEX = re.compile(r'^[A-Z]{1,3}\d{2,4}$')
@@ -927,9 +930,6 @@ class MainWindow(QMainWindow):
             # 复制架次号按钮状态
             self.copy_head_button.setEnabled(bool(head_code))
 
-            # 图号 → 匹配字符文件（相机路径）
-            self._try_match_charfile(main_code)
-
             # 保存记录（仅保存图号，可选）
             try:
                 if main_code:
@@ -1071,6 +1071,9 @@ class MainWindow(QMainWindow):
                     self.pass_sound.play()
             else:
                 self._set_status("状态: 未检测到图号，未复制", self.status_error_bg)
+
+            # 图号 → 匹配字符文件（相机路径）
+            self._try_match_charfile(main_code)
 
             self.copy_head_button.setEnabled(bool(head_code))
 
@@ -1574,6 +1577,12 @@ class MainWindow(QMainWindow):
         if dlg.exec_() == dlg.Accepted:
             # 配置变化后，尝试基于最近图号刷新一次匹配
             try:
+                from src.utils.charfile_matcher import clear_runtime_cache
+                clear_runtime_cache()
+            except Exception:
+                pass
+            try:
+                self._last_auto_open_signature = None
                 self._try_match_charfile(self.detected_main_code)
             except Exception:
                 pass
@@ -1782,6 +1791,7 @@ class MainWindow(QMainWindow):
                 from pathlib import Path
                 self.charfile_label.setText(f"字符文件: {Path(path).name} (score={score:.2f})")
                 self.open_charfile_button.setEnabled(True)
+                self._maybe_auto_open_charfile(main_code)
             else:
                 self.matched_char_file = None
                 self.matched_char_score = 0.0
@@ -1792,17 +1802,21 @@ class MainWindow(QMainWindow):
             self.charfile_label.setText("字符文件: <匹配出错>")
             self.open_charfile_button.setEnabled(False)
 
-    def on_open_charfile(self):
-        """通过自动化驱动喷码软件打开匹配到的字符文件。"""
+    def _open_matched_charfile(self, *, interactive: bool) -> bool:
+        """打开匹配到的字符文件。interactive=False 时仅记录日志，不弹窗。"""
         try:
             if not self.matched_char_file:
-                QMessageBox.information(self, "未匹配", "当前没有匹配到字符文件。")
-                return
+                if interactive:
+                    QMessageBox.information(self, "未匹配", "当前没有匹配到字符文件。")
+                return False
             try:
                 from src.utils.vendor_ui_driver import VendorUIDriver, UIDriverConfig
             except Exception as ie:
-                QMessageBox.critical(self, "依赖缺失", f"无法导入自动化驱动：{ie}")
-                return
+                if interactive:
+                    QMessageBox.critical(self, "依赖缺失", f"无法导入自动化驱动：{ie}")
+                else:
+                    logger.error(f"自动唤起失败（驱动导入）: {ie}")
+                return False
 
             # 读取配置
             try:
@@ -1812,15 +1826,72 @@ class MainWindow(QMainWindow):
             except Exception:
                 exe_path = None
                 title_re = r'.*(VJ-RT1|WH-VJ1000).*'
+            if not exe_path:
+                exe_path = self._infer_vendor_exe_from_demo_bat()
 
             cfg = UIDriverConfig(exe_path=exe_path, title_re=title_re, monitor_timeout_s=3.0)
             drv = VendorUIDriver(cfg)
-            drv.ensure_app()
+            try:
+                drv.ensure_app()
+            except RuntimeError as e:
+                msg = str(e)
+                if "exe_path not set, and no running window found" in msg:
+                    tip = "未找到运行中的喷码软件，且未配置喷码软件 exe。请先在“设置”中配置 exe，或先手动打开喷码软件。"
+                    if interactive:
+                        QMessageBox.warning(self, "无法唤起喷码软件", tip)
+                    else:
+                        logger.warning(tip)
+                        self._set_status("状态: 已匹配字符文件；未唤起喷码软件（请配置 exe 或先手动启动）", self.status_warning_bg)
+                    return False
+                raise
             drv.open_char_file(self.matched_char_file)
             self._set_status("状态: 已在喷码软件中打开字符文件", self.status_success_bg)
+            return True
         except Exception as e:
-            logging.getLogger(__name__).error(f"打开字符文件失败: {e}", exc_info=True)
-            QMessageBox.critical(self, "打开失败", f"无法打开字符文件：{e}")
+            if interactive:
+                logging.getLogger(__name__).error(f"打开字符文件失败: {e}", exc_info=True)
+            else:
+                logging.getLogger(__name__).warning(f"自动唤起失败: {e}")
+            if interactive:
+                QMessageBox.critical(self, "打开失败", f"无法打开字符文件：{e}")
+            return False
+
+    def _maybe_auto_open_charfile(self, main_code: str):
+        """匹配成功后自动唤起喷码软件，并避免重复触发。"""
+        if not self.auto_open_charfile_on_match:
+            return
+        if not main_code or not self.matched_char_file:
+            return
+        signature = f"{main_code}|{self.matched_char_file}"
+        if signature == self._last_auto_open_signature:
+            return
+        self._open_matched_charfile(interactive=False)
+        # 成功与失败都记录一次签名，避免同一目标反复尝试刷日志；
+        # 配置变更后会在 on_open_settings 中重置该签名。
+        self._last_auto_open_signature = signature
+
+    def _infer_vendor_exe_from_demo_bat(self):
+        """从项目根目录的 start_demo.bat 推断 --exe 参数路径。"""
+        try:
+            import re
+            repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            bat = os.path.join(repo_root, "start_demo.bat")
+            if not os.path.exists(bat):
+                return None
+            text = open(bat, "r", encoding="utf-8", errors="ignore").read()
+            m = re.search(r'--exe\\s+\"([^\"]+)\"', text, re.IGNORECASE)
+            if not m:
+                return None
+            exe = m.group(1).strip()
+            if exe and os.path.exists(exe):
+                return exe
+            return None
+        except Exception:
+            return None
+
+    def on_open_charfile(self):
+        """通过自动化驱动喷码软件打开匹配到的字符文件。"""
+        self._open_matched_charfile(interactive=True)
 
     def _init_sounds(self):
         """
