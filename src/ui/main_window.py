@@ -1857,18 +1857,12 @@ class MainWindow(QMainWindow):
             return False
 
     def _maybe_auto_open_charfile(self, main_code: str):
-        """匹配成功后自动唤起喷码软件，并避免重复触发。"""
+        """匹配成功后自动唤起喷码软件。"""
         if not self.auto_open_charfile_on_match:
             return
         if not main_code or not self.matched_char_file:
             return
-        signature = f"{main_code}|{self.matched_char_file}"
-        if signature == self._last_auto_open_signature:
-            return
         self._open_matched_charfile(interactive=False)
-        # 成功与失败都记录一次签名，避免同一目标反复尝试刷日志；
-        # 配置变更后会在 on_open_settings 中重置该签名。
-        self._last_auto_open_signature = signature
 
     def _infer_vendor_exe_from_demo_bat(self):
         """从项目根目录的 start_demo.bat 推断 --exe 参数路径。"""
