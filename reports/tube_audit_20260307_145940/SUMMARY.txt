@@ -1,0 +1,10 @@
+﻿timestamp=2026-03-07T15:00:18
+root=D:\TGY\vibecoding\delivery_offline\打码机管子汇总
+duplicate_hash_groups_processed=170
+files_moved_to_archive_dup=170
+removed_empty_dirs_count=318
+post_total_files=15947
+post_empty_dirs=0
+moves_csv=D:\TGY\vibecoding\delivery_offline\reports\tube_audit_20260307_145940\actions\archive_dup_moves.csv
+removed_empty_dirs_file=D:\TGY\vibecoding\delivery_offline\reports\tube_audit_20260307_145940\actions\removed_empty_dirs.txt
+summary_json=D:\TGY\vibecoding\delivery_offline\reports\tube_audit_20260307_145940\actions\archive_dup_move_summary.json

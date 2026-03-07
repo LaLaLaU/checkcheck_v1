@@ -22,3 +22,7 @@ _cls_dummy_infer/
 # Build/dist artifacts
 build/
 dist/
+
+# Production tube summary (large local dataset)
+打码机管子汇总/
+archive_dup/

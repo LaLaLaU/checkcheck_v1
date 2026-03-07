@@ -1,0 +1,13 @@
+﻿root_dir: D:\TGY\vibecoding\delivery_offline\打码机管子汇总
+total_files: 24644
+unique_hashes: 15516
+duplicate_hash_groups: 4405
+files_in_duplicate_hash_groups: 13533
+reclaimable_copies_if_keep_one_per_hash: 9128
+duplicate_name_groups: 4580
+
+outputs:
+- D:\TGY\vibecoding\delivery_offline\reports\tube_audit_20260307_141357\tube_inventory.csv
+- D:\TGY\vibecoding\delivery_offline\reports\tube_audit_20260307_141357\tube_duplicates_by_hash.csv
+- D:\TGY\vibecoding\delivery_offline\reports\tube_audit_20260307_141357\tube_duplicates_by_name.csv
+- D:\TGY\vibecoding\delivery_offline\reports\tube_audit_20260307_141357\tube_top_level_summary.csv
