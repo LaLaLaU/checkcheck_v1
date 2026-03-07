@@ -56,6 +56,9 @@ def main():
     parser.add_argument('--tail-ratio', dest='tail_ratio', type=float, default=None, help='列内水平比例 0.0..1.0（越小越靠左，默认 0.45）')
     parser.add_argument('--tail-left', dest='tail_left', type=int, default=None, help='相对内容列向左再偏移的列数（默认 0）')
     parser.add_argument('--viewport-cols', dest='viewport_cols', type=int, default=None, help='视窗可见列数 W（默认 123，调大等效“单页更宽”）')
+    parser.add_argument('--precise-insert', dest='precise_insert', action='store_true', help='开启精确插入模式（优先瞄准 last_idx+1）')
+    parser.add_argument('--precise-comp', dest='precise_comp', type=int, default=0, help='精确模式列补偿（正数右移，负数左移）')
+    parser.add_argument('--precise-ratio', dest='precise_ratio', type=float, default=None, help='精确模式目标列可视比例（0.0..1.0，默认 0.2）')
     args = parser.parse_args()
 
     # 统一解析字符文件路径：严格模式（仅精确文件名）
@@ -115,6 +118,11 @@ def main():
         setattr(cfg, 'tail_click_extra_left_cols', int(args.tail_left))
     if args.viewport_cols is not None and args.viewport_cols > 0:
         setattr(cfg, 'viewport_cols', int(args.viewport_cols))
+    if args.precise_insert:
+        setattr(cfg, 'precise_insert_mode', True)
+        setattr(cfg, 'precise_insert_compensation_cols', int(args.precise_comp))
+    if args.precise_ratio is not None:
+        setattr(cfg, 'precise_target_screen_ratio', float(args.precise_ratio))
 
     drv = VendorUIDriver(cfg)
 

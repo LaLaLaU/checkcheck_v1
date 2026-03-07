@@ -27,7 +27,7 @@ echo [demo] FILE=%~f0
 echo [demo] CHAR_ROOT=%CHECKCHECK_CHAR_ROOT%
 echo [demo] MAIN_CODE=%DEMO_MAIN%
 
-env\python.exe tools\demo_vendor_automation.py --title-re ".*VJ-RT1.1 Pro.*" --exe "C:\Users\video jet\Desktop\WH-VJ10001408.exe" --main "%DEMO_MAIN%" --grid-wait 0.3 --sleep-scale 0.4 --page-only --viewport-cols 90 --tail-left 34 %*
+env\python.exe tools\demo_vendor_automation.py --title-re ".*VJ-RT1.1 Pro.*" --exe "C:\Users\video jet\Desktop\WH-VJ10001408.exe" --main "%DEMO_MAIN%" --grid-wait 0.3 --sleep-scale 0.4 --viewport-cols 124 --precise-insert --precise-comp 10 %*
 set ERR=%ERRORLEVEL%
 echo [demo] exit code: %ERR%
 popd

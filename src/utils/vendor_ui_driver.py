@@ -54,9 +54,15 @@ class UIDriverConfig:
     fast_page: bool = True
     # Page-only mode: skip fine-grained per-column adjustment.
     page_only: bool = False
-    # Insert click horizontal tuning.
+    # Legacy insert tuning (kept for compatibility; no effect in always-on precise mode).
     tail_click_inner_ratio: float = 0.45
     tail_click_extra_left_cols: int = 0
+    # Precise insertion mode (always-on): target desired column (last_idx + 1).
+    precise_insert_mode: bool = True
+    # Optional compensation (in columns) applied to precise target. Positive moves right.
+    precise_insert_compensation_cols: int = 0
+    # In precise mode, place target column at this visible-ratio position (0.0..1.0, from left to right).
+    precise_target_screen_ratio: float = 0.2
     # Enable absolute positioning via WM_HSCROLL THUMBPOSITION (not supported by all controls).
     use_thumb_position: bool = False
     # Optionally confirm one more time after monitor text updates.
@@ -626,7 +632,16 @@ class VendorUIDriver:
 
             # Core parameters: desired / S / P / R.
             W = int(self._viewport_cols_default)
-            r = 2
+            precise_mode = True
+            target_col = None
+            try:
+                ratio = float(getattr(self.cfg, 'precise_target_screen_ratio', 0.2) or 0.2)
+            except Exception:
+                ratio = 0.2
+            ratio = max(0.05, min(0.85, ratio))
+            target_col = max(1, min(W - 2, int(round(W * ratio))))
+            # desired-screen-col = W - r -> r = W - desired-screen-col
+            r = max(0, min(W - 1, W - target_col))
             if self.cfg.scroll_to_file_end:
                 total = int(plan.get('total', 0))
                 desired = max(0, total - 1)
@@ -638,7 +653,10 @@ class VendorUIDriver:
                 percent = plan.get('percent')
             except Exception:
                 percent = None
-            print(f"[drv][{self._ts()}] grid-scroll plan: desired={desired} W={W} r={r} steps={S} percent={percent}")
+            print(
+                f"[drv][{self._ts()}] grid-scroll plan: precise={precise_mode} "
+                f"desired={desired} W={W} r={r} target_col={target_col} steps={S} percent={percent}"
+            )
 
             # Reset to far-left first.
             if not win32gui:
@@ -673,8 +691,6 @@ class VendorUIDriver:
                 # Split S into page and residual line scroll steps.
                 P = max(0, S // W)
                 R = max(0, S - P * W)
-                if getattr(self.cfg, 'page_only', False):
-                    R = 0
                 try:
                     for i in range(P):
                         win32gui.SendMessage(hwnd, win32con.WM_HSCROLL, win32con.SB_PAGERIGHT, 0)
@@ -752,25 +768,34 @@ class VendorUIDriver:
             # Horizontal click: place near the visible column of the tail content, slightly left of center.
             try:
                 W = int(self._viewport_cols_default)
-                r = 2
+                precise_mode = True
+                try:
+                    ratio = float(getattr(self.cfg, 'precise_target_screen_ratio', 0.2) or 0.2)
+                except Exception:
+                    ratio = 0.2
+                ratio = max(0.05, min(0.85, ratio))
+                target_col = max(1, min(W - 2, int(round(W * ratio))))
+                r = max(0, min(W - 1, W - target_col))
+
                 # Use same scroll-plan parameters to locate the tail content column.
                 plan = get_scroll_plan(charfile_path, viewport_cols=W, right_margin=r)
                 last_idx = max(0, int(plan.get('last_idx', 0)))
                 desired = max(0, int(plan.get('desired', last_idx + 1)))
                 S = max(0, desired - W + r)
-                # In page_only mode, effective steps become page steps P*W.
-                if getattr(self.cfg, 'page_only', False):
-                    P_eff = S // W
-                    S_eff = P_eff * W
-                else:
-                    S_eff = S
-                screen_col = max(0, min(W - 1, last_idx - S_eff))
-                # Allow extra left offset in columns to click closer to content area.
-                extra_left = int(getattr(self.cfg, 'tail_click_extra_left_cols', 0) or 0)
-                screen_col = max(0, screen_col - max(0, extra_left))
-                # In-column offset ratio: 0.0 (left) to 1.0 (right).
-                inner = float(getattr(self.cfg, 'tail_click_inner_ratio', 0.45) or 0.45)
-                inner = max(0.1, min(0.9, inner))
+                S_eff = S
+
+                target_idx = desired
+                comp = int(getattr(self.cfg, 'precise_insert_compensation_cols', 0) or 0)
+                target_idx = max(0, target_idx + comp)
+                screen_col = max(0, min(W - 1, target_idx - S_eff))
+
+                inner = 0.5
+
+                print(
+                    f"[drv][{self._ts()}] tail-target: precise={precise_mode} "
+                    f"last_idx={last_idx} desired={desired} target_idx={target_idx} "
+                    f"target_col={target_col} S_eff={S_eff} screen_col={screen_col}"
+                )
                 col_w = max(1.0, (right - left) / float(W))
                 gx_calc = int(left + (screen_col + inner) * col_w)
                 gx = max(left + 5, min(right - 8, gx_calc))
@@ -1083,8 +1108,3 @@ class VendorUIDriver:
                 send_keys('{UP %d}' % (-dy))
             send_keys(' ')
             cur = (col, row)
-
-
-
-
-
