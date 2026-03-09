@@ -1541,6 +1541,12 @@ class MainWindow(QMainWindow):
         code = f"{prefix}{tail}"
         if self.HEAD_REGEX.fullmatch(code):
             return code
+
+        # 回退规则：短码（<=7）也可作为架次号候选。
+        # 例如 S2-F19 -> S2F19，这类在生产中常见，但不满足“字母+纯数字”严格格式。
+        short = t[:7]
+        if 2 <= len(short) <= 7 and any(ch.isdigit() for ch in short):
+            return short
         return ""
 
     def _extract_codes(self, text_with_positions):
@@ -1558,10 +1564,10 @@ class MainWindow(QMainWindow):
                 head_norm = self._normalize_head_code(text)
                 if head_norm:
                     h_score = float(confidence or 0.0)
-                    if (mid_y is not None) and (_cy is not None) and (_cy >= mid_y):
-                        h_score += 0.25
                     if self.HEAD_REGEX_STRICT.fullmatch(head_norm):
                         h_score += 0.15
+                    if len(head_norm) <= 7:
+                        h_score += 0.10
                     head_candidates.append((h_score, head_norm))
                 continue
 
@@ -1571,10 +1577,10 @@ class MainWindow(QMainWindow):
                 head_norm = self._normalize_head_code(norm)
                 if head_norm:
                     h_score = float(confidence or 0.0)
-                    if (mid_y is not None) and (_cy is not None) and (_cy >= mid_y):
-                        h_score += 0.25
                     if self.HEAD_REGEX_STRICT.fullmatch(head_norm):
                         h_score += 0.15
+                    if len(head_norm) <= 7:
+                        h_score += 0.10
                     head_candidates.append((h_score, head_norm))
 
             # 图号评分
