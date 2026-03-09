@@ -235,8 +235,8 @@ class MainWindow(QMainWindow):
         # 结果显示区：左侧文字结果 + 右侧识别结果图
         self.results_groupbox = QGroupBox("识别结果")
         results_container = QHBoxLayout(self.results_groupbox)
-        results_container.setContentsMargins(8, 8, 8, 8)
-        results_container.setSpacing(8)
+        results_container.setContentsMargins(4, 4, 4, 4)
+        results_container.setSpacing(6)
 
         left_widget = QWidget()
         results_layout = QFormLayout(left_widget) 
@@ -292,17 +292,17 @@ class MainWindow(QMainWindow):
         results_layout.addRow(self.comparison_result)
 
         # 左侧加入容器
-        results_container.addWidget(left_widget, 2)
+        results_container.addWidget(left_widget, 1)
 
         # 右侧识别结果图
         self.result_preview_label = QLabel("实时画面")
         self.result_preview_label.setAlignment(Qt.AlignCenter)
-        # 右下角小窗：实时画面
-        self.result_preview_label.setMinimumSize(220, 140)
-        self.result_preview_label.setMaximumSize(360, 220)
-        self.result_preview_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        # 右下角小窗：实时画面（进一步增大占比，减少留白）
+        self.result_preview_label.setMinimumSize(360, 230)
+        self.result_preview_label.setMaximumSize(900, 560)
+        self.result_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.result_preview_label.setStyleSheet("border: 1px solid #cccccc; background-color: #ffffff;")
-        results_container.addWidget(self.result_preview_label, 1)
+        results_container.addWidget(self.result_preview_label, 3)
 
         # 状态颜色常量
         self.status_success_bg = "#e0ffe0"   # 绿色淡色
@@ -386,8 +386,9 @@ class MainWindow(QMainWindow):
         # 设置分割器初始比例 (approximate from screenshot)
         # Adjust these values as needed
         splitter.setHandleWidth(0)
-        # 默认窗口更高后，维持上70%/下30%
-        splitter.setSizes([int(self.height() * 0.7), int(self.height() * 0.3)]) 
+        # 调整为上56% / 下44%：
+        # 识别结果大图区相对缩小，底部（含实时小窗）相对放大。
+        splitter.setSizes([int(self.height() * 0.56), int(self.height() * 0.44)])
 
         # 设置结果文本样式
         self.result_style = """
