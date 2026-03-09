@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
     QApplication, QFormLayout, QStyle, QComboBox, QTableWidgetItem, QTableWidget, QCheckBox, QSizePolicy, QShortcut
 )
 from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader, QPalette, QColor, QKeySequence
-from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, QThread, QTimer, QUrl, QEvent
+from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, pyqtSlot, QObject, QThread, QTimer, QUrl, QEvent
 from PyQt5.QtMultimedia import QSoundEffect
 from src.utils.database_manager import init_db
 from src.ui.history_window import HistoryWindow
@@ -114,10 +114,60 @@ class ImageDropLabel(QLabel):
             event.ignore()
 
 
+class VendorPushWorker(QObject):
+    """后台串行执行喷码软件唤起/载入/填入，避免阻塞主线程 UI。"""
+    finished = pyqtSignal(str, str)  # (level: success|warning|error, message)
+
+    @pyqtSlot(str, str, str, str)
+    def run_push(self, char_file: str, norm_head: str, exe_path: str, title_re: str):
+        try:
+            from src.utils.vendor_ui_driver import VendorUIDriver, UIDriverConfig
+        except Exception as ie:
+            self.finished.emit("warning", f"状态: 自动唤起失败（驱动导入）: {ie}")
+            return
+
+        cfg = UIDriverConfig(
+            exe_path=(exe_path or None),
+            title_re=(title_re or r'.*(VJ-RT1|WH-VJ1000).*'),
+            monitor_timeout_s=3.0,
+        )
+        drv = VendorUIDriver(cfg)
+
+        try:
+            drv.ensure_app()
+        except RuntimeError as e:
+            msg = str(e)
+            if "exe_path not set, and no running window found" in msg:
+                self.finished.emit("warning", "状态: 已匹配字符文件；未唤起喷码软件（请配置 exe 或先手动启动）")
+                return
+            self.finished.emit("warning", f"状态: 自动唤起失败: {e}")
+            return
+        except Exception as e:
+            self.finished.emit("warning", f"状态: 自动唤起失败: {e}")
+            return
+
+        try:
+            drv.open_char_file(char_file)
+        except Exception as e:
+            self.finished.emit("warning", f"状态: 字符文件打开失败: {e}")
+            return
+
+        if norm_head:
+            try:
+                drv.fill_sortie(norm_head)
+                self.finished.emit("success", f"状态: 已打开字符文件并写入架次号 {norm_head}")
+            except Exception as e:
+                self.finished.emit("warning", f"状态: 已打开字符文件，但架次号写入失败: {e}")
+        else:
+            self.finished.emit("success", "状态: 已在喷码软件中打开字符文件")
+
+
 class MainWindow(QMainWindow):
     """
     应用程序主窗口类
     """
+    # 自动唤起/填入任务：char_file, normalized_head_code, exe_path, title_re
+    vendor_push_requested = pyqtSignal(str, str, str, str)
     
     def __init__(self):
         """
@@ -156,6 +206,8 @@ class MainWindow(QMainWindow):
         # 识别命中后自动唤起喷码软件（同一图号+文件仅触发一次）
         self.auto_open_charfile_on_match = True
         self._last_auto_open_signature = None
+        self.vendor_push_thread = None
+        self.vendor_push_worker = None
 
         # 编译正则：架次号与图号
         self.HEAD_REGEX_STRICT = re.compile(r'^[A-Z]{1,3}\d{2,4}$')
@@ -193,6 +245,8 @@ class MainWindow(QMainWindow):
 
         # 初始化音效
         self._init_sounds()
+        # 初始化后台喷码任务线程（识别后异步执行）
+        self._init_vendor_push_worker()
 
     def _setup_ui(self):
         """
@@ -1721,6 +1775,74 @@ class MainWindow(QMainWindow):
             except TypeError: pass
             self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
 
+    def _init_vendor_push_worker(self):
+        """初始化后台线程：识别后自动唤起/填入改为异步排队执行。"""
+        try:
+            self.vendor_push_thread = QThread(self)
+            self.vendor_push_worker = VendorPushWorker()
+            self.vendor_push_worker.moveToThread(self.vendor_push_thread)
+
+            self.vendor_push_requested.connect(self.vendor_push_worker.run_push, Qt.QueuedConnection)
+            self.vendor_push_worker.finished.connect(self._on_vendor_push_finished, Qt.QueuedConnection)
+            self.vendor_push_thread.start()
+        except Exception as e:
+            logger.error(f"初始化后台喷码任务线程失败: {e}", exc_info=True)
+            self.vendor_push_thread = None
+            self.vendor_push_worker = None
+
+    def _shutdown_vendor_push_worker(self):
+        """关闭后台线程。"""
+        thread = getattr(self, "vendor_push_thread", None)
+        if not thread:
+            return
+        try:
+            thread.quit()
+            thread.wait(2000)
+        except Exception as e:
+            logger.warning(f"关闭后台喷码任务线程失败: {e}")
+        self.vendor_push_worker = None
+        self.vendor_push_thread = None
+
+    def _resolve_vendor_launch_config(self):
+        """读取喷码软件连接配置（配置优先，demo bat 推断兜底）。"""
+        try:
+            from src.utils.config import get_vendor_exe, get_vendor_title_re
+            exe_path = get_vendor_exe()
+            title_re = get_vendor_title_re()
+        except Exception:
+            exe_path = None
+            title_re = r'.*(VJ-RT1|WH-VJ1000).*'
+        if not exe_path:
+            exe_path = self._infer_vendor_exe_from_demo_bat()
+        return (exe_path or ""), (title_re or r'.*(VJ-RT1|WH-VJ1000).*')
+
+    def _enqueue_vendor_push(self, head_code: str = None):
+        """把自动唤起/填入任务放入后台队列，不阻塞当前识别 UI。"""
+        if not self.matched_char_file:
+            return
+
+        norm_head = self._normalize_head_code(head_code) if head_code else ""
+        exe_path, title_re = self._resolve_vendor_launch_config()
+
+        thread = getattr(self, "vendor_push_thread", None)
+        worker = getattr(self, "vendor_push_worker", None)
+        if not thread or not worker or not thread.isRunning():
+            logger.warning("后台喷码线程不可用，降级为同步执行。")
+            self._open_matched_charfile(interactive=False, head_code=norm_head)
+            return
+
+        self._set_status("状态: 已匹配字符文件，后台正在唤起并写入...", self.status_warning_bg)
+        self.vendor_push_requested.emit(self.matched_char_file, norm_head, exe_path, title_re)
+
+    @pyqtSlot(str, str)
+    def _on_vendor_push_finished(self, level: str, message: str):
+        if level == "success":
+            self._set_status(message, self.status_success_bg)
+        elif level == "warning":
+            self._set_status(message, self.status_warning_bg)
+        else:
+            self._set_status(message, self.status_error_bg)
+
     def _try_match_charfile(self, main_code: str, head_code: str = None, *, auto_push: bool = True):
         """根据图号匹配字符文件，更新 UI 与可用操作。"""
         try:
@@ -1767,15 +1889,7 @@ class MainWindow(QMainWindow):
                 return False
 
             # 读取配置
-            try:
-                from src.utils.config import get_vendor_exe, get_vendor_title_re
-                exe_path = get_vendor_exe()
-                title_re = get_vendor_title_re()
-            except Exception:
-                exe_path = None
-                title_re = r'.*(VJ-RT1|WH-VJ1000).*'
-            if not exe_path:
-                exe_path = self._infer_vendor_exe_from_demo_bat()
+            exe_path, title_re = self._resolve_vendor_launch_config()
 
             cfg = UIDriverConfig(exe_path=exe_path, title_re=title_re, monitor_timeout_s=3.0)
             drv = VendorUIDriver(cfg)
@@ -1820,7 +1934,7 @@ class MainWindow(QMainWindow):
             return
         if not main_code or not self.matched_char_file:
             return
-        self._open_matched_charfile(interactive=False, head_code=head_code)
+        self._enqueue_vendor_push(head_code=head_code)
 
     def _infer_vendor_exe_from_demo_bat(self):
         """从项目根目录的 start_demo.bat 推断 --exe 参数路径。"""
@@ -1896,3 +2010,14 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         return super().eventFilter(obj, event)
+
+    def closeEvent(self, event):
+        try:
+            self.stop_camera()
+        except Exception:
+            pass
+        try:
+            self._shutdown_vendor_push_worker()
+        except Exception:
+            pass
+        super().closeEvent(event)
