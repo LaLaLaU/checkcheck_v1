@@ -959,8 +959,12 @@ class MainWindow(QMainWindow):
         QApplication.processEvents() # Update UI
         
         try:
+            if self.cv_image is None:
+                raise RuntimeError("当前无可用相机帧")
+            # 固定快照：后续 OCR/预览/保存均基于同一帧，避免“前端与保存图不一致”
+            frame_snapshot = self.cv_image.copy()
             # Perform OCR on the current frame
-            results = self._perform_ocr(self.cv_image.copy()) # Use a copy to avoid race conditions
+            results = self._perform_ocr(frame_snapshot)
             
             if results is None:
                  raise RuntimeError("OCR 处理返回失败 (None)")
@@ -989,17 +993,6 @@ class MainWindow(QMainWindow):
                 self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
                 return
             
-            # 在图像上绘制文本框
-            marked_image = self._draw_text_boxes(self.cv_image.copy(), text_with_positions)
-            
-            # 将标记后的图像转换为QPixmap
-            h, w, ch = marked_image.shape
-            bytes_per_line = ch * w
-            qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-            pixmap_marked = QPixmap.fromImage(qt_image)
-            # 右侧预览显示标记图，不改变左侧相机画面
-            preview = pixmap_marked.scaled(self.result_preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.result_preview_label.setPixmap(preview)
             # 保持左侧相机画面显示当前帧（未标记），避免视觉停留
             if self.cv_image is not None:
                 h2, w2, ch2 = self.cv_image.shape
@@ -1019,7 +1012,7 @@ class MainWindow(QMainWindow):
             
             # 假设上半部分是标牌文字，下半部分是喷码文字
             # 计算中间分界线
-            height = self.cv_image.shape[0]
+            height = frame_snapshot.shape[0]
             middle_y = height / 2
             
             label_texts = []
@@ -1048,15 +1041,17 @@ class MainWindow(QMainWindow):
             self.detected_main_code = main_code
             self.detected_head_code = head_code
 
-            # 高亮图号框
-            if main_box is not None:
-                marked_image = self._draw_text_boxes(self.cv_image.copy(), [(main_box, main_code or "", 1.0, 0)])
-                h, w, ch = marked_image.shape
+            # 预览图与保存图统一：同一快照、同一渲染函数
+            image_to_save = self._build_captured_image(frame_snapshot, text_with_positions, main_code, head_code, main_box)
+            try:
+                h, w, ch = image_to_save.shape
                 bytes_per_line = ch * w
-                qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+                qt_image = QImage(image_to_save.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
                 pixmap_marked = QPixmap.fromImage(qt_image)
                 preview = pixmap_marked.scaled(self.result_preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 self.result_preview_label.setPixmap(preview)
+            except Exception:
+                pass
 
             # 更新UI显示与复制（离线包加入违规段高亮）
             try:
@@ -1086,7 +1081,6 @@ class MainWindow(QMainWindow):
                 capture_dir = self._ensure_capture_dir()
                 filename = f"capture_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
                 save_path = os.path.join(capture_dir, filename)
-                image_to_save = self._build_captured_image(self.cv_image, text_with_positions, main_code, head_code, main_box)
                 cv2.imwrite(save_path, image_to_save)
                 from src.utils.database_manager import add_history_record
                 add_history_record(save_path, main_code or "", head_code or "")
