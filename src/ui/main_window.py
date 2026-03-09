@@ -1208,13 +1208,66 @@ class MainWindow(QMainWindow):
                 except Exception:
                     return False
 
+            def _remap_boxes_from_rot180(res, w: int, h: int):
+                """将“对180°旋转图像识别得到的框”映射回原图坐标系。"""
+                if not res:
+                    return res
+
+                def _map_point(pt):
+                    x = float(pt[0])
+                    y = float(pt[1])
+                    return [w - 1 - x, h - 1 - y]
+
+                def _replace_box(line, new_box):
+                    if isinstance(line, tuple):
+                        return (new_box, *line[1:])
+                    if isinstance(line, list):
+                        return [new_box, *line[1:]]
+                    return line
+
+                mapped = []
+                for page in res:
+                    if not isinstance(page, list):
+                        mapped.append(page)
+                        continue
+                    new_page = []
+                    for line in page:
+                        try:
+                            if not isinstance(line, (list, tuple)) or len(line) < 1:
+                                new_page.append(line)
+                                continue
+                            box = line[0]
+                            # 多边形点框 [[x,y], ...]
+                            if isinstance(box, list) and len(box) == 4 and isinstance(box[0], (list, tuple)) and len(box[0]) == 2:
+                                new_box = [_map_point(pt) for pt in box]
+                                new_page.append(_replace_box(line, new_box))
+                                continue
+                            # 矩形框 [x1,y1,x2,y2]
+                            if isinstance(box, (list, tuple)) and len(box) == 4:
+                                x1, y1, x2, y2 = [float(v) for v in box]
+                                p1 = _map_point([x1, y1])
+                                p2 = _map_point([x2, y2])
+                                nx1 = min(p1[0], p2[0])
+                                ny1 = min(p1[1], p2[1])
+                                nx2 = max(p1[0], p2[0])
+                                ny2 = max(p1[1], p2[1])
+                                new_box = [nx1, ny1, nx2, ny2]
+                                new_page.append(_replace_box(line, new_box))
+                                continue
+                            new_page.append(line)
+                        except Exception:
+                            new_page.append(line)
+                    mapped.append(new_page)
+                return mapped
+
             if not _is_result_meaningful(results):
                 try:
                     import cv2 as _cv2
+                    h, w = image_data.shape[:2]
                     rotated = _cv2.rotate(image_data, _cv2.ROTATE_180)
                     results_rot = self.ocr_processor.ocr(rotated, cls=False)
                     if _is_result_meaningful(results_rot):
-                        results = results_rot
+                        results = _remap_boxes_from_rot180(results_rot, w, h)
                         logger.info("Used 180° rotated OCR result as it was better.")
                 except Exception as _e:
                     logger.warning(f"180° retry failed: {_e}")
