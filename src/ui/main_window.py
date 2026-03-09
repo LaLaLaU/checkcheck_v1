@@ -931,8 +931,8 @@ class MainWindow(QMainWindow):
                 # 未识别到 → 红色
                 self._set_status("状态: 未检测到图号，未复制", self.status_error_bg)
 
-            # 图号 → 匹配字符文件
-            self._try_match_charfile(main_code)
+            # 图号 → 匹配字符文件，并自动写入架次号
+            self._try_match_charfile(main_code, head_code)
 
             # 复制架次号按钮状态
             self.copy_head_button.setEnabled(bool(head_code))
@@ -1074,8 +1074,8 @@ class MainWindow(QMainWindow):
             else:
                 self._set_status("状态: 未检测到图号，未复制", self.status_error_bg)
 
-            # 图号 → 匹配字符文件（相机路径）
-            self._try_match_charfile(main_code)
+            # 图号 → 匹配字符文件（相机路径），并自动写入架次号
+            self._try_match_charfile(main_code, head_code)
 
             self.copy_head_button.setEnabled(bool(head_code))
 
@@ -1703,7 +1703,7 @@ class MainWindow(QMainWindow):
                 pass
             try:
                 self._last_auto_open_signature = None
-                self._try_match_charfile(self.detected_main_code)
+                self._try_match_charfile(self.detected_main_code, self.detected_head_code, auto_push=False)
             except Exception:
                 pass
 
@@ -1898,7 +1898,7 @@ class MainWindow(QMainWindow):
             except TypeError: pass
             self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
 
-    def _try_match_charfile(self, main_code: str):
+    def _try_match_charfile(self, main_code: str, head_code: str = None, *, auto_push: bool = True):
         """根据图号匹配字符文件，更新 UI 与可用操作。"""
         try:
             if not main_code:
@@ -1915,7 +1915,8 @@ class MainWindow(QMainWindow):
                 from pathlib import Path
                 self.charfile_label.setText(f"字符文件: {Path(path).name} (score={score:.2f})")
                 self.open_charfile_button.setEnabled(True)
-                self._maybe_auto_open_charfile(main_code)
+                if auto_push:
+                    self._maybe_auto_open_charfile(main_code, head_code)
             else:
                 self.matched_char_file = None
                 self.matched_char_score = 0.0
@@ -1926,8 +1927,8 @@ class MainWindow(QMainWindow):
             self.charfile_label.setText("字符文件: <匹配出错>")
             self.open_charfile_button.setEnabled(False)
 
-    def _open_matched_charfile(self, *, interactive: bool) -> bool:
-        """打开匹配到的字符文件。interactive=False 时仅记录日志，不弹窗。"""
+    def _open_matched_charfile(self, *, interactive: bool, head_code: str = None) -> bool:
+        """打开匹配到的字符文件，并在提供架次号时自动写入。interactive=False 时仅记录日志，不弹窗。"""
         try:
             if not self.matched_char_file:
                 if interactive:
@@ -1969,7 +1970,17 @@ class MainWindow(QMainWindow):
                     return False
                 raise
             drv.open_char_file(self.matched_char_file)
-            self._set_status("状态: 已在喷码软件中打开字符文件", self.status_success_bg)
+            norm_head = self._normalize_head_code(head_code) if head_code else ""
+            if norm_head:
+                try:
+                    drv.fill_sortie(norm_head)
+                    self._set_status(f"状态: 已打开字符文件并写入架次号 {norm_head}", self.status_success_bg)
+                except Exception as e:
+                    if interactive:
+                        QMessageBox.warning(self, "架次号写入失败", f"字符文件已打开，但写入架次号失败：{e}")
+                    self._set_status("状态: 已打开字符文件，但架次号写入失败", self.status_warning_bg)
+            else:
+                self._set_status("状态: 已在喷码软件中打开字符文件", self.status_success_bg)
             return True
         except Exception as e:
             if interactive:
@@ -1980,13 +1991,13 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "打开失败", f"无法打开字符文件：{e}")
             return False
 
-    def _maybe_auto_open_charfile(self, main_code: str):
-        """匹配成功后自动唤起喷码软件。"""
+    def _maybe_auto_open_charfile(self, main_code: str, head_code: str = None):
+        """匹配成功后自动唤起喷码软件，并自动写入架次号。"""
         if not self.auto_open_charfile_on_match:
             return
         if not main_code or not self.matched_char_file:
             return
-        self._open_matched_charfile(interactive=False)
+        self._open_matched_charfile(interactive=False, head_code=head_code)
 
     def _infer_vendor_exe_from_demo_bat(self):
         """从项目根目录的 start_demo.bat 推断 --exe 参数路径。"""
@@ -2009,7 +2020,7 @@ class MainWindow(QMainWindow):
 
     def on_open_charfile(self):
         """通过自动化驱动喷码软件打开匹配到的字符文件。"""
-        self._open_matched_charfile(interactive=True)
+        self._open_matched_charfile(interactive=True, head_code=self.detected_head_code)
 
     def _init_sounds(self):
         """
