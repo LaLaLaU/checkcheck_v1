@@ -45,14 +45,15 @@ class ImageDropLabel(QLabel):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAcceptDrops(True)
+        # 静态图片识别已移除：禁用拖拽加载。
+        self.setAcceptDrops(False)
         self.setAlignment(Qt.AlignCenter)
         # 禁止控件自行拉伸内容，始终按等比例显示
         try:
             self.setScaledContents(False)
         except Exception:
             pass
-        self.setText("请拖拽图片到此处或点击\"上传图像\"按钮")
+        self.setText("等待识别结果...")
         self.setFrameShape(QFrame.Box)
         self.setMinimumHeight(400)
         self.setStyleSheet("background-color: #f0f0f0; color: gray;")
@@ -217,11 +218,6 @@ class MainWindow(QMainWindow):
         # 不拉伸内容，容器自适应但保持等比显示
         self.image_label.setScaledContents(False)
         self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        # 禁用拖拽上传
-        try:
-            self.image_label.fileDropped.disconnect()
-        except Exception:
-            pass
         image_layout.addWidget(self.image_label)
         splitter.addWidget(image_widget)
         
@@ -425,8 +421,7 @@ class MainWindow(QMainWindow):
             QLabel#image_label { background-color: #f0f0f0; border: 1px solid #cccccc; }
         """)
         
-        # Connect the drop signal
-        self.image_label.fileDropped.connect(self._load_image)
+        # 静态图片识别已移除：不连接拖拽加载信号。
 
         # 全局快捷键：Enter 和小键盘 Enter 触发开始识别
         shortcut_return = QShortcut(QKeySequence(Qt.Key_Return), self)
@@ -687,77 +682,18 @@ class MainWindow(QMainWindow):
                     self.start_camera() # Start the new camera immediately
 
     def on_upload_image(self):
-        """
-        处理上传图像按钮点击事件
-        """
-        # 打开文件对话框
-        file_dialog = QFileDialog()
-        image_path, _ = file_dialog.getOpenFileName(
-            self, "选择图像", "", "图像文件 (*.png *.jpg *.jpeg *.bmp)"
-        )
-        
-        # 如果用户选择了文件
-        if image_path:
-            self._load_image(image_path)
-    
+        """静态图片识别已移除：保留方法仅作提示。"""
+        QMessageBox.information(self, "提示", "静态图片识别功能已移除，请使用相机识别。")
+
     def load_image(self, image_path):
-        """
-        加载并显示图像（公共方法，供外部调用）
-        
-        Args:
-            image_path (str): 图像文件路径
-        """
-        self._load_image(image_path)
+        """静态图片识别已移除：保留接口避免外部调用崩溃。"""
+        _ = image_path
+        logger.warning("load_image called, but static image recognition has been removed.")
 
     def _load_image(self, image_path):
-        """
-        加载并显示图像（内部方法）
-        
-        Args:
-            image_path (str): 图像文件路径
-        """
-        # 保存图像路径
-        self.image_path = image_path
-        
-        # 加载图像
-        pixmap = QPixmap(image_path)
-        if pixmap.isNull():
-            QMessageBox.critical(self, "错误", "无法加载图像文件")
-            return
-        
-        # 保存当前图像
-        self.current_image = pixmap
-        
-        # 加载OpenCV格式的图像
-        self.cv_image = cv2.imread(image_path)
-        
-        # 调整图像大小以适应标签
-        pixmap = self._resize_pixmap(pixmap)
-        
-        # 显示图像
-        self.image_label.setPixmap(pixmap)
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.result_preview_label.clear()
-        self.result_preview_label.setText("实时画面")
-        
-        # 启用识别按钮
-        self.recognize_button.setEnabled(True)
-        
-        # 重置结果显示
-        self.clear_recognition_results()
-        
-        # 如果摄像头在运行，停止它
-        if self.camera_running:
-             logger.info("Stopping camera because new image was loaded.")
-             self.stop_camera()
-        
-        # 切换到图片模式
-        self.switch_mode_button.setText(" 切换到相机")
-        try:
-            self.switch_mode_button.clicked.disconnect()
-        except TypeError:
-            pass  # 如果没有连接的信号，忽略错误
-        self.switch_mode_button.clicked.connect(self.switch_to_camera_mode)
+        """静态图片识别已移除：保留方法仅作兼容。"""
+        _ = image_path
+        logger.warning("_load_image called, but static image recognition has been removed.")
 
     def switch_to_camera_mode(self):
         """切换到相机识别模式"""
@@ -775,12 +711,8 @@ class MainWindow(QMainWindow):
         self.start_camera() # This will update buttons via update_camera_status
 
     def switch_to_image_mode(self):
-        """切换到图片识别模式"""
-        if not self.camera_running: return # Already in image mode or camera failed
-        self.pause_camera_updates = False # Ensure pause is reset
-        self.resume_camera_button.setEnabled(False) # Disable resume button
-        self.clear_recognition_results()
-        self.stop_camera() # This updates buttons and resets label
+        """静态图片识别已移除：保留方法仅作兼容。"""
+        QMessageBox.information(self, "提示", "静态图片识别功能已移除，请使用相机识别。")
 
     def resume_camera(self):
         """恢复相机实时画面"""
@@ -830,7 +762,7 @@ class MainWindow(QMainWindow):
         self.open_charfile_button.setEnabled(False)
 
     def _recognize_current_frame(self):
-        """Handles the click of the recognize button for both live and static images."""
+        """点击开始识别：仅支持相机识别。"""
         if not self.ocr_processor:
             QMessageBox.critical(self, "错误", "OCR 处理器未初始化或加载失败。")
             return
@@ -838,121 +770,12 @@ class MainWindow(QMainWindow):
         if self.camera_running and self.cv_image is not None:
             # 相机始终实时，直接触发一次识别（不暂停）
             QTimer.singleShot(100, self._perform_camera_recognition)
-        elif self.current_image:
-            # 处理静态图像
-            self.on_start_recognition()
         else:
-            QMessageBox.warning(self, "无图像", "请先上传图像或启动摄像头。")
+            QMessageBox.warning(self, "无相机画面", "请先启动摄像头并确保有实时画面。")
 
     def on_start_recognition(self):
-        """
-        处理开始识别按钮点击事件
-        """
-        if not self.ocr_processor:
-            QMessageBox.critical(self, "错误", "OCR 处理器未初始化或加载失败。")
-            return
-        if not hasattr(self, 'image_path') or not self.image_path or not os.path.exists(self.image_path):
-            QMessageBox.warning(self, "无图像", "请先上传有效的图像文件。")
-            return
-
-        logger.info(f"Starting recognition for static image: {self.image_path}")
-        self.recognize_button.setEnabled(False)
-        self.upload_button.setEnabled(False) # Disable upload during recognition
-        # Update result displays with 'processing' status
-        self.label_text_result.setText("图号: [识别中...]")
-        self.print_text_result.setText("架次号: [识别中...]")
-        self._set_status("状态: [处理中...]", self.status_warning_bg)
-        QApplication.processEvents() # Allow UI to update
-
-        try:
-            # 使用已加载的OpenCV图像数据
-            if self.cv_image is None:
-                raise ValueError("无法使用已加载的图像")
-
-            # Perform OCR using the common method
-            results = self._perform_ocr(self.cv_image)
-
-            if results is None: # Check if OCR itself failed
-                raise RuntimeError("OCR 处理返回失败 (None)")
-            
-            # 提取文本和位置信息
-            text_with_positions = []
-            if results and results[0]:
-                for line in results[0]:
-                    if len(line) >= 2 and isinstance(line[1], tuple) and len(line[1]) >= 2:
-                        box = line[0]  # 文本框坐标
-                        text = line[1][0]  # 文本内容
-                        confidence = line[1][1]  # 置信度
-                        
-                        # 计算文本框中心点y坐标，用于判断上下位置
-                        center_y = sum(point[1] for point in box) / len(box)
-                        
-                        text_with_positions.append((box, text, confidence, center_y))
-            
-            # 在大图区域显示识别标注结果
-            if text_with_positions:
-                marked_image = self._draw_text_boxes(self.cv_image.copy(), text_with_positions)
-                h, w, ch = marked_image.shape
-                bytes_per_line = ch * w
-                qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-                pixmap_marked = QPixmap.fromImage(qt_image)
-                pixmap_marked = self._resize_pixmap(pixmap_marked)
-                self.image_label.setPixmap(pixmap_marked)
-            
-            # --- 选择图号/架次号并复制 ---
-            main_code, head_code, main_box = self._extract_codes(text_with_positions)
-            self.detected_main_code = main_code
-            self.detected_head_code = head_code
-
-            # 高亮图号框（若有）
-            if main_box is not None:
-                marked_image = self._draw_text_boxes(self.cv_image.copy(), [(main_box, main_code or "", 1.0, 0)])
-                h, w, ch = marked_image.shape
-                bytes_per_line = ch * w
-                qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
-                pixmap = QPixmap.fromImage(qt_image)
-                pixmap = self._resize_pixmap(pixmap)
-                self.image_label.setPixmap(pixmap)
-
-            # 更新显示与复制
-            self.label_text_result.setText(f"图号: {main_code or '<未检测到>'}")
-            self.print_text_result.setText(f"架次号: {head_code or '<未检测到>'}")
-            if main_code:
-                QApplication.clipboard().setText(main_code)
-                # 严格匹配 → 绿色；仅宽松匹配 → 黄色
-                if self.MAIN_STRICT.fullmatch(main_code):
-                    self._set_status("状态: 已自动复制图号到剪贴板", self.status_success_bg)
-                else:
-                    self._set_status("状态: 图号位数与规范不一致，已复制", self.status_warning_bg)
-                # 播放成功音效
-                if self.pass_sound.source().isValid():
-                    self.pass_sound.play()
-            else:
-                # 未识别到 → 红色
-                self._set_status("状态: 未检测到图号，未复制", self.status_error_bg)
-
-            # 图号 → 匹配字符文件，并自动写入架次号
-            self._try_match_charfile(main_code, head_code)
-
-            # 复制架次号按钮状态
-            self.copy_head_button.setEnabled(bool(head_code))
-
-            # 保存记录（仅保存图号，可选）
-            try:
-                if main_code:
-                    self.add_record(self.image_path, main_code or "", head_code or "")
-            except Exception as e:
-                logger.error(f"Failed to save simplified record: {e}", exc_info=True)
-
-        except Exception as e:
-            logger.error(f"Error during static image recognition: {e}", exc_info=True)
-            QMessageBox.critical(self, "识别错误", f"处理静态图像时出错: {e}")
-            self.label_text_result.setText("图号: 错误")
-            self.print_text_result.setText("架次号: 错误")
-            self._set_status("状态: 错误", self.status_error_bg)
-        finally:
-            self.recognize_button.setEnabled(True) # Re-enable recognize button
-            self.upload_button.setEnabled(True) # Re-enable upload button
+        """静态图片识别已移除：保留方法仅作兼容。"""
+        QMessageBox.information(self, "提示", "静态图片识别功能已移除，请使用相机识别。")
 
     def _perform_camera_recognition(self):
         """执行相机画面识别，与_recognize_current_frame分离以允许短暂延时获取最新画面"""
