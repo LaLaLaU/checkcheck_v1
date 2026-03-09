@@ -295,14 +295,14 @@ class MainWindow(QMainWindow):
         results_container.addWidget(left_widget, 2)
 
         # 右侧识别结果图
-        self.result_preview_label = QLabel("识别结果图")
+        self.result_preview_label = QLabel("实时画面")
         self.result_preview_label.setAlignment(Qt.AlignCenter)
-        # 放大约50%
-        self.result_preview_label.setMinimumSize(450, 270)
-        self.result_preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # 右下角小窗：实时画面
+        self.result_preview_label.setMinimumSize(220, 140)
+        self.result_preview_label.setMaximumSize(360, 220)
+        self.result_preview_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self.result_preview_label.setStyleSheet("border: 1px solid #cccccc; background-color: #ffffff;")
-        # 提高右侧权重，使其更大
-        results_container.addWidget(self.result_preview_label, 4)
+        results_container.addWidget(self.result_preview_label, 1)
 
         # 状态颜色常量
         self.status_success_bg = "#e0ffe0"   # 绿色淡色
@@ -736,6 +736,8 @@ class MainWindow(QMainWindow):
         # 显示图像
         self.image_label.setPixmap(pixmap)
         self.image_label.setAlignment(Qt.AlignCenter)
+        self.result_preview_label.clear()
+        self.result_preview_label.setText("实时画面")
         
         # 启用识别按钮
         self.recognize_button.setEnabled(True)
@@ -762,7 +764,9 @@ class MainWindow(QMainWindow):
         self.clear_recognition_results()
         # Clear image display and variables
         self.image_label.clear()
-        self.image_label.setText("正在启动相机...")
+        self.image_label.setText("等待识别结果...")
+        self.result_preview_label.clear()
+        self.result_preview_label.setText("正在启动相机...")
         self.current_image = None
         self.cv_image = None
         self.image_path = None 
@@ -884,16 +888,15 @@ class MainWindow(QMainWindow):
                         
                         text_with_positions.append((box, text, confidence, center_y))
             
-            # 在图像上绘制文本框
+            # 在大图区域显示识别标注结果
             if text_with_positions:
                 marked_image = self._draw_text_boxes(self.cv_image.copy(), text_with_positions)
-                # 仅更新右侧预览，不影响相机实时画面
                 h, w, ch = marked_image.shape
                 bytes_per_line = ch * w
                 qt_image = QImage(marked_image.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
                 pixmap_marked = QPixmap.fromImage(qt_image)
-                preview = pixmap_marked.scaled(self.result_preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.result_preview_label.setPixmap(preview)
+                pixmap_marked = self._resize_pixmap(pixmap_marked)
+                self.image_label.setPixmap(pixmap_marked)
             
             # --- 选择图号/架次号并复制 ---
             main_code, head_code, main_box = self._extract_codes(text_with_positions)
@@ -993,14 +996,14 @@ class MainWindow(QMainWindow):
                 self.results_groupbox.setStyleSheet(self.base_groupbox_style.format(background_color=self.default_groupbox_background))
                 return
             
-            # 保持左侧相机画面显示当前帧（未标记），避免视觉停留
+            # 右下角小窗显示实时相机画面
             if self.cv_image is not None:
                 h2, w2, ch2 = self.cv_image.shape
                 bytes_per_line2 = ch2 * w2
                 qt_image2 = QImage(self.cv_image.data, w2, h2, bytes_per_line2, QImage.Format_RGB888).rgbSwapped()
                 pixmap_frame = QPixmap.fromImage(qt_image2)
-                pixmap_frame = self._resize_pixmap(pixmap_frame)
-                self.image_label.setPixmap(pixmap_frame)
+                preview_live = pixmap_frame.scaled(self.result_preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.result_preview_label.setPixmap(preview_live)
             self.current_image = None # Ensure static image is cleared
 
             # 相机永远实时：根据复选框决定是否自动轮询识别，但不暂停画面
@@ -1041,15 +1044,15 @@ class MainWindow(QMainWindow):
             self.detected_main_code = main_code
             self.detected_head_code = head_code
 
-            # 预览图与保存图统一：同一快照、同一渲染函数
+            # 大图显示识别结果；保存图与大图统一：同一快照、同一渲染函数
             image_to_save = self._build_captured_image(frame_snapshot, text_with_positions, main_code, head_code, main_box)
             try:
                 h, w, ch = image_to_save.shape
                 bytes_per_line = ch * w
                 qt_image = QImage(image_to_save.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
                 pixmap_marked = QPixmap.fromImage(qt_image)
-                preview = pixmap_marked.scaled(self.result_preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.result_preview_label.setPixmap(preview)
+                pixmap_marked = self._resize_pixmap(pixmap_marked)
+                self.image_label.setPixmap(pixmap_marked)
             except Exception:
                 pass
 
@@ -1740,7 +1743,9 @@ class MainWindow(QMainWindow):
             self.current_image = None
             self.cv_image = None
             self.image_label.clear()
-            self.image_label.setText("启动摄像头...") 
+            self.image_label.setText("等待识别结果...")
+            self.result_preview_label.clear()
+            self.result_preview_label.setText("启动摄像头...") 
         
         self.camera_thread = QThread(self) # Parent to main window
         # Pass the selected camera index to the worker
@@ -1802,10 +1807,12 @@ class MainWindow(QMainWindow):
         self.camera_worker = None
         logger.info("Cleared references to camera_thread and camera_worker.")
 
-        # Reset image label 
+        # Reset image label
         self.image_label.clear() # Clear pixmap first
-        self.image_label.setText("请拖拽图片到此处或点击\"上传图像\"按钮") # Corrected text
+        self.image_label.setText("等待识别结果...")
         self.image_label.setStyleSheet("background-color: #f0f0f0; color: gray;")
+        self.result_preview_label.clear()
+        self.result_preview_label.setText("实时画面")
         self.cv_image = None 
 
         # Re-enable camera selection if multiple cameras are available
@@ -1837,8 +1844,8 @@ class MainWindow(QMainWindow):
             bytes_per_line = ch * w
             qt_image = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
             pixmap = QPixmap.fromImage(qt_image)
-            pixmap = self._resize_pixmap(pixmap)
-            self.image_label.setPixmap(pixmap) # Display frame
+            preview = pixmap.scaled(self.result_preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.result_preview_label.setPixmap(preview) # Display live frame in small window
             self.current_image = None # Ensure static image is cleared
         except Exception as e:
             logger.error(f"Error in update_frame: {e}", exc_info=True)
