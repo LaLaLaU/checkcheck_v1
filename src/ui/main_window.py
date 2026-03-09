@@ -26,6 +26,7 @@ from src.utils.camera_utils import detect_available_cameras
 from src.core.text_comparator import TextComparator # 导入 TextComparator
 import logging
 import re # Added for preprocessing
+import unicodedata
 
 # Attempt to import the OCR processor
 try:
@@ -156,7 +157,9 @@ class MainWindow(QMainWindow):
         self._last_auto_open_signature = None
 
         # 编译正则：架次号与图号
-        self.HEAD_REGEX = re.compile(r'^[A-Z]{1,3}\d{2,4}$')
+        self.HEAD_REGEX_STRICT = re.compile(r'^[A-Z]{1,3}\d{2,4}$')
+        # 放宽一档：兼容生产中存在的 1~4 字母 + 2~6 数字
+        self.HEAD_REGEX = re.compile(r'^[A-Z]{1,4}\d{2,6}$')
         # 图号严格规范：(3|4|5)-4-1-3-3，首段首字符为大写字母
         self.MAIN_STRICT = re.compile(r'^[A-Z][A-Z0-9]{2,4}\.\d{4}\.[A-Z]\.\d{3}\.\d{3}$')
         # 宽松匹配：用于候选评分（黄色提示），不作为成功标准
@@ -1504,20 +1507,76 @@ class MainWindow(QMainWindow):
                 return ""  # 非法行
         return s
 
+    def _normalize_head_code(self, s: str) -> str:
+        """将 OCR 文本归一化为架次号候选（容错 O/0、I/1、连字符等）。"""
+        if s is None:
+            return ""
+        t = unicodedata.normalize("NFKC", str(s)).upper().strip()
+        if not t:
+            return ""
+        # 去掉常见分隔符，仅保留字母数字
+        t = re.sub(r"[\s\-\_\.\,\:\;\|]+", "", t)
+        t = "".join(ch for ch in t if ch.isalnum())
+        if len(t) < 3:
+            return ""
+
+        # 尝试在行中抽取连续候选段
+        m = re.search(r"[A-Z]{1,4}[A-Z0-9]{2,6}", t)
+        if m:
+            t = m.group(0)
+
+        m2 = re.fullmatch(r"([A-Z]{1,4})([A-Z0-9]{2,6})", t)
+        if not m2:
+            return ""
+
+        prefix, tail = m2.groups()
+        tail = tail.translate(str.maketrans({
+            "O": "0", "Q": "0", "D": "0",
+            "I": "1", "L": "1",
+            "Z": "2",
+            "S": "5",
+            "G": "6",
+            "B": "8",
+        }))
+        code = f"{prefix}{tail}"
+        if self.HEAD_REGEX.fullmatch(code):
+            return code
+        return ""
+
     def _extract_codes(self, text_with_positions):
         """从OCR行中提取图号与架次号。
         Returns: (main_code, head_code, main_box)
         """
         main_candidates = []  # (score, text, box)
-        head_candidate = None
+        head_candidates = []  # (score, text)
+        mid_y = (self.cv_image.shape[0] / 2.0) if self.cv_image is not None else None
         for item in text_with_positions or []:
             box, text, confidence, _cy = item
             norm = self._normalize_and_validate(text)
             if not norm:
+                # 即便该行不满足图号字符集，也尝试按架次号规则提取
+                head_norm = self._normalize_head_code(text)
+                if head_norm:
+                    h_score = float(confidence or 0.0)
+                    if (mid_y is not None) and (_cy is not None) and (_cy >= mid_y):
+                        h_score += 0.25
+                    if self.HEAD_REGEX_STRICT.fullmatch(head_norm):
+                        h_score += 0.15
+                    head_candidates.append((h_score, head_norm))
                 continue
-            # 架次号
-            if self.HEAD_REGEX.fullmatch(norm) and head_candidate is None:
-                head_candidate = norm
+
+            # 架次号（容错归一化）
+            looks_like_main = bool(self.MAIN_FALLBACK.fullmatch(norm))
+            if not looks_like_main:
+                head_norm = self._normalize_head_code(norm)
+                if head_norm:
+                    h_score = float(confidence or 0.0)
+                    if (mid_y is not None) and (_cy is not None) and (_cy >= mid_y):
+                        h_score += 0.25
+                    if self.HEAD_REGEX_STRICT.fullmatch(head_norm):
+                        h_score += 0.15
+                    head_candidates.append((h_score, head_norm))
+
             # 图号评分
             score = 0.0
             if self.MAIN_STRICT.fullmatch(norm):
@@ -1528,6 +1587,10 @@ class MainWindow(QMainWindow):
                 # 融合置信度
                 score += 0.5 * float(confidence or 0)
                 main_candidates.append((score, norm, box))
+        head_candidate = None
+        if head_candidates:
+            head_candidates.sort(key=lambda x: x[0], reverse=True)
+            head_candidate = head_candidates[0][1]
         if main_candidates:
             main_candidates.sort(key=lambda x: x[0], reverse=True)
             best = main_candidates[0]
