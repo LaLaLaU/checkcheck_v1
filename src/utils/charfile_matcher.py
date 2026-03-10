@@ -100,13 +100,39 @@ def _base_name_pairs(p: Path) -> List[str]:
     这样可同时兼容“把 .971 当作名字一部分”和“把 .971 当作扩展名”的两种情况。
     """
     name = p.name
-    stem = p.stem if p.suffix else p.name
+    # 业务约定：纯数字“后缀”是图号正文的一部分，不应当成扩展名剥离。
+    if p.suffix and (p.suffix.lstrip(".").isdigit()):
+        stem = p.name
+    else:
+        stem = p.stem if p.suffix else p.name
     # 去重并保持顺序
     out: List[str] = []
     for s in (name, stem):
         if s and s not in out:
             out.append(s)
     return out
+
+
+def _should_skip_stem_alias(norm: str, path: Path) -> bool:
+    """过滤将数字尾段误当扩展名导致的 stem 别名。
+
+    示例：
+    - 文件名: J11B.6125.B.065.945
+    - stem:  J11B.6125.B.065
+    这类 alias 会导致尾段未匹配仍拿到很高分，需剔除。
+    """
+    try:
+        suffix = (path.suffix or "").lstrip(".")
+        if not suffix or not suffix.isdigit():
+            return False
+        full_norm = normalize_code(path.name)
+        stem_norm = normalize_code(path.stem)
+        n = normalize_code(norm)
+        if not n or not stem_norm or not full_norm:
+            return False
+        return (n == stem_norm) and full_norm.startswith(stem_norm + ".")
+    except Exception:
+        return False
 
 
 def build_index(root_dir: Optional[str] = None) -> Dict[str, str]:
@@ -259,6 +285,8 @@ def _build_runtime_index_from_mapping(mapping: Dict[str, str]) -> RuntimeIndex:
         if not norm2:
             continue
         path = Path(path_s)
+        if _should_skip_stem_alias(norm2, path):
+            continue
         candidate = CharfileCandidate(path=path, norm=norm2, segs=_split_segs(norm2))
         idx = len(entries)
         entries.append(candidate)

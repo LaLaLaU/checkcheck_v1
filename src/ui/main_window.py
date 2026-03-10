@@ -1923,7 +1923,11 @@ class MainWindow(QMainWindow):
 
         p = Path(full_path)
         cands = []
-        for raw in (p.name, p.stem if p.suffix else p.name):
+        # 业务规则：纯数字后缀属于图号正文，展示时必须保留。
+        raws = [p.name]
+        if p.suffix and (not p.suffix.lstrip(".").isdigit()):
+            raws.append(p.stem)
+        for raw in raws:
             norm = normalize_code(raw)
             if norm and norm not in cands:
                 cands.append(norm)
