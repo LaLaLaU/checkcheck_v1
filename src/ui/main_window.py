@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QLabel, QFileDialog, QMessageBox, QDialog,
     QSplitter, QFrame, QGroupBox, QProgressDialog,
     QApplication, QFormLayout, QStyle, QComboBox, QTableWidgetItem, QTableWidget, QCheckBox, QSizePolicy, QShortcut,
-    QHeaderView, QAbstractItemView
+    QHeaderView, QAbstractItemView, QLineEdit
 )
 from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader, QPalette, QColor, QKeySequence
 from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, pyqtSlot, QObject, QThread, QTimer, QUrl, QEvent
@@ -353,6 +353,20 @@ class MainWindow(QMainWindow):
         row_layout.addWidget(self.copy_head_button)
         row_layout.addStretch(1)
         results_layout.addRow(row_widget)
+
+        # 固定架次号模式：可输入固定架次号并启用
+        fixed_widget = QWidget()
+        fixed_layout = QHBoxLayout(fixed_widget)
+        fixed_layout.setContentsMargins(0, 0, 0, 0)
+        fixed_layout.setSpacing(8)
+        self.fixed_head_mode_checkbox = QCheckBox("固定架次号模式")
+        self.fixed_head_input = QLineEdit()
+        self.fixed_head_input.setPlaceholderText("输入固定架次号（如 SG100）")
+        self.fixed_head_input.setMaximumWidth(260)
+        fixed_layout.addWidget(self.fixed_head_mode_checkbox)
+        fixed_layout.addWidget(self.fixed_head_input)
+        fixed_layout.addStretch(1)
+        results_layout.addRow(fixed_widget)
 
         # 再放“图号”行（下方）
         self.label_text_result = QLabel("图号: 等待识别...")
@@ -954,7 +968,8 @@ class MainWindow(QMainWindow):
                 print_text = " ".join(print_texts)
             
             # 直接解析为图号/架次号
-            main_code, head_code, main_box = self._extract_codes(text_with_positions)
+            main_code, head_code_raw, main_box = self._extract_codes(text_with_positions)
+            head_code, head_decision_tag = self._resolve_head_code_with_fixed_mode(head_code_raw)
             self.detected_main_code = main_code
             self.detected_head_code = head_code
 
@@ -989,7 +1004,18 @@ class MainWindow(QMainWindow):
                 self.label_text_result.setText(self._generate_main_highlight_html(main_code) if main_code else "图号: <未检测到>")
             except Exception:
                 self.label_text_result.setText(f"图号: {main_code or '<未检测到>'}")
-            self.print_text_result.setText(f"架次号: {head_code or '<未检测到>'}")
+            if head_decision_tag == "fixed_equal" and head_code:
+                self.print_text_result.setText(f"架次号: {head_code}（识别=固定）")
+            elif head_decision_tag == "fixed_only" and head_code:
+                self.print_text_result.setText(f"架次号: {head_code}（固定）")
+            elif head_decision_tag == "fixed_chosen" and head_code:
+                rec_show = self._normalize_head_code(head_code_raw) if head_code_raw else "<未检测到>"
+                self.print_text_result.setText(f"架次号: {head_code}（固定优先，识别:{rec_show}）")
+            elif head_decision_tag == "recognized_chosen" and head_code:
+                fixed_show = self._normalize_head_code(self.fixed_head_input.text()) if hasattr(self, "fixed_head_input") else ""
+                self.print_text_result.setText(f"架次号: {head_code}（识别优先，固定:{fixed_show or '<无>'}）")
+            else:
+                self.print_text_result.setText(f"架次号: {head_code or '<未检测到>'}")
             if main_code:
                 QApplication.clipboard().setText(main_code)
                 if self.MAIN_STRICT.fullmatch(main_code):
@@ -1000,6 +1026,8 @@ class MainWindow(QMainWindow):
                     self.pass_sound.play()
             else:
                 self._set_status("状态: 未检测到图号，未复制", self.status_error_bg)
+            if head_decision_tag == "fixed_invalid":
+                self._set_status("状态: 固定架次号格式无效，已按识别值处理", self.status_warning_bg)
 
             # 图号 → 匹配字符文件（相机路径），并自动写入架次号
             self._try_match_charfile(main_code, head_code)
@@ -1547,6 +1575,75 @@ class MainWindow(QMainWindow):
             return short
         return ""
 
+    def _prompt_head_source_choice(self, recognized_head: str, fixed_head: str) -> str:
+        """固定架次号与识别架次号不一致时，选择使用哪一个。"""
+        dlg = QDialog(self)
+        dlg.setModal(True)
+        dlg.setWindowTitle("架次号不一致")
+        dlg.setMinimumWidth(520)
+
+        layout = QVBoxLayout(dlg)
+        title = QLabel("识别到的架次号与固定架次号不一致，请选择使用哪一个：", dlg)
+        title.setWordWrap(True)
+        info = QLabel(f"识别到: {recognized_head}    固定值: {fixed_head}", dlg)
+        info.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(info)
+
+        btn_row = QHBoxLayout()
+        use_fixed_btn = QPushButton(f"使用固定架次号（{fixed_head}）", dlg)
+        use_rec_btn = QPushButton(f"使用识别架次号（{recognized_head}）", dlg)
+        for b in (use_fixed_btn, use_rec_btn):
+            b.setMinimumHeight(40)
+            b.setAutoDefault(True)
+            btn_row.addWidget(b)
+        layout.addLayout(btn_row)
+
+        result = {"choice": "fixed"}
+
+        def _choose_fixed():
+            result["choice"] = "fixed"
+            dlg.accept()
+
+        def _choose_rec():
+            result["choice"] = "recognized"
+            dlg.accept()
+
+        use_fixed_btn.clicked.connect(_choose_fixed)
+        use_rec_btn.clicked.connect(_choose_rec)
+        dlg.rejected.connect(_choose_fixed)
+        use_fixed_btn.setDefault(True)
+        use_fixed_btn.setFocus()
+        dlg.exec_()
+        return result["choice"]
+
+    def _resolve_head_code_with_fixed_mode(self, recognized_head: str):
+        """根据固定架次号模式决定最终用于流程的架次号。
+
+        Returns: (effective_head_code, tag)
+          tag in {'normal','fixed_equal','fixed_only','fixed_chosen','recognized_chosen','fixed_invalid'}
+        """
+        rec_norm = self._normalize_head_code(recognized_head) if recognized_head else ""
+        mode_on = bool(getattr(self, "fixed_head_mode_checkbox", None) and self.fixed_head_mode_checkbox.isChecked())
+        if not mode_on:
+            return rec_norm, "normal"
+
+        fixed_raw = (self.fixed_head_input.text() if getattr(self, "fixed_head_input", None) else "") or ""
+        fixed_norm = self._normalize_head_code(fixed_raw)
+        if not fixed_norm:
+            return rec_norm, "fixed_invalid"
+
+        if rec_norm and rec_norm != fixed_norm:
+            choice = self._prompt_head_source_choice(rec_norm, fixed_norm)
+            if choice == "recognized":
+                return rec_norm, "recognized_chosen"
+            return fixed_norm, "fixed_chosen"
+
+        if rec_norm == fixed_norm and rec_norm:
+            return fixed_norm, "fixed_equal"
+
+        return fixed_norm, "fixed_only"
+
     def _extract_codes(self, text_with_positions):
         """从OCR行中提取图号与架次号。
         Returns: (main_code, head_code, main_box)
@@ -1941,28 +2038,35 @@ class MainWindow(QMainWindow):
         """将候选图号中与识别图号差异的字母/数字高亮为红色。"""
         t = target_norm or ""
         c = cand_norm or ""
+        if not c:
+            return "<span style='color:#8c8c8c;'>&lt;空&gt;</span>"
+
         out = []
-        max_len = max(len(t), len(c))
-        for i in range(max_len):
-            tc = t[i] if i < len(t) else ""
-            cc = c[i] if i < len(c) else ""
-            if cc:
-                esc = html.escape(cc)
-                if tc == cc:
-                    out.append(f"<span>{esc}</span>")
-                else:
-                    # 字母/数字差异重点标红
-                    if (tc and tc.isalnum()) or cc.isalnum():
+        sm = difflib.SequenceMatcher(None, t, c)
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            seg_c = c[j1:j2]
+            seg_t = t[i1:i2]
+
+            if tag == "equal":
+                out.append(html.escape(seg_c))
+                continue
+
+            if tag in ("replace", "insert"):
+                for ch in seg_c:
+                    esc = html.escape(ch)
+                    if ch.isalnum():
                         out.append(f"<span style='color:#cf1322;font-weight:700;'>{esc}</span>")
                     else:
                         out.append(f"<span style='color:#d46b08;font-weight:700;'>{esc}</span>")
-            else:
-                # 候选缺失字符（识别端有）也标记
-                if tc and tc.isalnum():
-                    out.append("<span style='color:#cf1322;font-weight:700;'>□</span>")
-        if not out:
-            return "<span style='color:#8c8c8c;'>&lt;空&gt;</span>"
-        return "".join(out)
+                continue
+
+            if tag == "delete":
+                # 候选缺失而目标存在，用占位符提示缺失位数。
+                miss_cnt = sum(1 for ch in seg_t if ch.isalnum())
+                if miss_cnt > 0:
+                    out.append("<span style='color:#cf1322;font-weight:700;'>" + ("□" * miss_cnt) + "</span>")
+
+        return "".join(out) if out else "<span style='color:#8c8c8c;'>&lt;空&gt;</span>"
 
     def _apply_manual_confirmation_preview(self):
         """人工确认候选后，刷新大预览并在图号下追加一行人工确认信息。"""
