@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-    QPushButton, QLabel, QFileDialog, QMessageBox, QDialog,
+    QPushButton, QLabel, QFileDialog, QMessageBox, QDialog, QInputDialog,
     QSplitter, QFrame, QGroupBox, QProgressDialog,
     QApplication, QFormLayout, QStyle, QComboBox, QTableWidgetItem, QTableWidget, QCheckBox, QSizePolicy, QShortcut
 )
@@ -1873,6 +1873,33 @@ class MainWindow(QMainWindow):
         else:
             self._set_status(message, self.status_error_bg)
 
+    def _prompt_pick_charfile_candidate(self, main_code: str, ranked):
+        """当图号匹配非满分时，人工选择候选字符文件。"""
+        try:
+            if not ranked:
+                return None
+            from pathlib import Path
+            items = []
+            mapping = {}
+            for i, (path, score) in enumerate(ranked, 1):
+                p = Path(path)
+                label = f"{i}. {p.name} | score={float(score):.2f} | {p.parent.name}"
+                items.append(label)
+                mapping[label] = (str(p), float(score))
+            chosen, ok = QInputDialog.getItem(
+                self,
+                "候选字符文件选择",
+                f"图号识别结果“{main_code}”非满分，请选择要加载的字符文件：",
+                items,
+                0,
+                False,
+            )
+            if ok and chosen in mapping:
+                return mapping[chosen]
+        except Exception as e:
+            logger.warning(f"候选字符文件选择弹窗失败: {e}")
+        return None
+
     def _try_match_charfile(self, main_code: str, head_code: str = None, *, auto_push: bool = True):
         """根据图号匹配字符文件，更新 UI 与可用操作。"""
         try:
@@ -1882,17 +1909,49 @@ class MainWindow(QMainWindow):
                 self.charfile_label.setText("字符文件: <未匹配>")
                 self.open_charfile_button.setEnabled(False)
                 return
-            from src.utils.charfile_matcher import find_best_charfile
+            from src.utils.charfile_matcher import find_best_charfile, find_top_charfiles
             path, score = find_best_charfile(main_code)
             if path is not None:
-                self.matched_char_file = str(path)
-                self.matched_char_score = float(score)
+                selected_path = str(path)
+                selected_score = float(score)
+
+                # 非满分时，先让人工确认候选文件，再继续后续流程。
+                if selected_score < 1.0 and auto_push:
+                    ranked = find_top_charfiles(main_code, top_k=8)
+                    picked = self._prompt_pick_charfile_candidate(main_code, ranked)
+                    if picked is None:
+                        self.matched_char_file = None
+                        self.matched_char_score = 0.0
+                        self.charfile_label.setText("字符文件: <候选未确认>")
+                        self.open_charfile_button.setEnabled(False)
+                        self._set_status("状态: 图号非满分，已取消候选选择，请重新识别", self.status_warning_bg)
+                        return
+                    selected_path, selected_score = picked
+
+                self.matched_char_file = selected_path
+                self.matched_char_score = selected_score
                 from pathlib import Path
-                self.charfile_label.setText(f"字符文件: {Path(path).name} (score={score:.2f})")
+                hint = " (已人工确认)" if selected_score < 1.0 else ""
+                self.charfile_label.setText(f"字符文件: {Path(selected_path).name} (score={selected_score:.2f}){hint}")
                 self.open_charfile_button.setEnabled(True)
                 if auto_push:
                     self._maybe_auto_open_charfile(main_code, head_code)
             else:
+                # 低于阈值时也给出候选，允许人工确认。
+                if auto_push:
+                    ranked = find_top_charfiles(main_code, top_k=8)
+                    picked = self._prompt_pick_charfile_candidate(main_code, ranked) if ranked else None
+                    if picked is not None:
+                        selected_path, selected_score = picked
+                        self.matched_char_file = str(selected_path)
+                        self.matched_char_score = float(selected_score)
+                        from pathlib import Path
+                        self.charfile_label.setText(
+                            f"字符文件: {Path(selected_path).name} (score={float(selected_score):.2f}) (已人工确认)"
+                        )
+                        self.open_charfile_button.setEnabled(True)
+                        self._maybe_auto_open_charfile(main_code, head_code)
+                        return
                 self.matched_char_file = None
                 self.matched_char_score = 0.0
                 self.charfile_label.setText("字符文件: <未匹配>")

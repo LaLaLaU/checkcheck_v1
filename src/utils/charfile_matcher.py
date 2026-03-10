@@ -400,10 +400,11 @@ def find_top_charfiles(main_code: str, *, top_k: int = 3, use_index: bool = True
     if not runtime.entries:
         return []
 
-    # 先尝试精确命中（任一变体）
-    for v in variants:
-        if v in runtime.exact:
-            return [(runtime.exact[v], 1.0)]
+    # 仅当“原始归一化图号”与文件名严格一致时，才给满分 1.0。
+    strict_norm = normalize_code(main_code)
+    strict_exact_path: Optional[Path] = runtime.exact.get(strict_norm) if strict_norm else None
+    if strict_exact_path is not None:
+        return [(strict_exact_path, 1.0)]
 
     candidate_indexes: Set[int] = set()
     for v in variants:
@@ -416,6 +417,11 @@ def find_top_charfiles(main_code: str, *, top_k: int = 3, use_index: bool = True
         score = 0.0
         for v in variants:
             score = max(score, _weighted_score(v, cand))
+        # 非严格逐字符一致命中，不允许满分。
+        cand_key = str(cand.path).lower()
+        strict_key = str(strict_exact_path).lower() if strict_exact_path is not None else None
+        if strict_key is None or cand_key != strict_key:
+            score = min(score, 0.99)
         key = str(cand.path).lower()
         if score > path_score.get(key, -1.0):
             path_score[key] = score
