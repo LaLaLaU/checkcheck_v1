@@ -244,6 +244,9 @@ class MainWindow(QMainWindow):
         self._last_recog_main_box = None
         self._last_recog_main_code = None
         self._last_recog_head_code = None
+        self._last_recog_head_code_raw = None
+        self._last_recog_head_decision_tag = "normal"
+        self._last_recog_fixed_head_code = None
 
         # 编译正则：架次号与图号
         self.HEAD_REGEX_STRICT = re.compile(r'^[A-Z]{1,3}\d{2,4}$')
@@ -331,16 +334,10 @@ class MainWindow(QMainWindow):
         results_layout.setLabelAlignment(Qt.AlignRight)
 
         font = QFont()
-        font.setPointSize(12) # Increase font size
-
-        # 复制架次号按钮：提前创建，供结果容器使用
-        self.copy_head_button = QPushButton(" 复制架次号")
-        self.copy_head_button.setToolTip("复制最近一次识别到的架次号")
-        self.copy_head_button.setEnabled(False)
-        self.copy_head_button.clicked.connect(self.copy_head_to_clipboard)
+        font.setPointSize(14)
 
         # 先放“架次号”行（上方）
-        # 将“喷码文字”替换为“架次号”，并把复制按钮放入同一容器
+        # 将“喷码文字”替换为“架次号”
         row_widget = QWidget()
         row_layout = QHBoxLayout(row_widget)
         row_layout.setContentsMargins(0, 0, 0, 0)
@@ -350,7 +347,6 @@ class MainWindow(QMainWindow):
         self.print_text_result.setFont(font)
         self.print_text_result.setTextInteractionFlags(Qt.TextSelectableByMouse) # Allow text selection
         row_layout.addWidget(self.print_text_result)
-        row_layout.addWidget(self.copy_head_button)
         row_layout.addStretch(1)
         results_layout.addRow(row_widget)
 
@@ -360,9 +356,10 @@ class MainWindow(QMainWindow):
         fixed_layout.setContentsMargins(0, 0, 0, 0)
         fixed_layout.setSpacing(8)
         self.fixed_head_mode_checkbox = QCheckBox("固定架次号模式")
+        self.fixed_head_mode_checkbox.setStyleSheet("font-size: 14pt; font-weight: 800;")
         self.fixed_head_input = QLineEdit()
         self.fixed_head_input.setPlaceholderText("输入固定架次号（如 SG100）")
-        self.fixed_head_input.setMaximumWidth(260)
+        self.fixed_head_input.setMaximumWidth(320)
         fixed_layout.addWidget(self.fixed_head_mode_checkbox)
         fixed_layout.addWidget(self.fixed_head_input)
         fixed_layout.addStretch(1)
@@ -380,10 +377,11 @@ class MainWindow(QMainWindow):
         self.charfile_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         results_layout.addRow(self.charfile_label)
 
+        # 手动“打开字符文件”入口已移除：保留隐藏按钮仅兼容旧逻辑中的 enabled 状态切换
         self.open_charfile_button = QPushButton("打开字符文件")
+        self.open_charfile_button.setVisible(False)
         self.open_charfile_button.setEnabled(False)
         self.open_charfile_button.clicked.connect(self.on_open_charfile)
-        results_layout.addRow(self.open_charfile_button)
 
         # 状态容器：用于显示复制结果，并通过背景色辅助提示
         self.comparison_result = QLabel("状态: 等待识别...")
@@ -498,7 +496,7 @@ class MainWindow(QMainWindow):
             padding: 8px;
             background-color: #f8f8f8;
             margin: 2px;
-            font-size: 12pt;
+            font-size: 14pt;
         }
         """
         
@@ -516,9 +514,10 @@ class MainWindow(QMainWindow):
         # 应用简单的 QSS 样式 (Keep existing styles)
         self.setStyleSheet("""
             QMainWindow { background-color: #ffffff; }
-            QGroupBox { font-size: 12pt; border: 1px solid #cccccc; border-radius: 5px; margin-top: 1.5ex; padding-top: 12px; }
+            QGroupBox { font-size: 13pt; border: 1px solid #cccccc; border-radius: 5px; margin-top: 1.5ex; padding-top: 12px; }
             QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 3px; left: 10px; }
-            QPushButton { padding: 8px 15px; border: 1px solid #cccccc; border-radius: 4px; background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f6f7fa, stop:1 #dadbde); min-width: 80px; font-size: 10pt; }
+            QLabel, QCheckBox, QLineEdit, QComboBox { font-size: 12pt; }
+            QPushButton { padding: 8px 15px; border: 1px solid #cccccc; border-radius: 4px; background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f6f7fa, stop:1 #dadbde); min-width: 80px; font-size: 12pt; }
             QPushButton:hover { background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #e6e7ea, stop:1 #ced0d4); }
             QPushButton:pressed { background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #dadbde, stop:1 #f6f7fa); }
             QPushButton:disabled { background-color: #e0e0e0; color: #a0a0a0; }
@@ -970,6 +969,7 @@ class MainWindow(QMainWindow):
             # 直接解析为图号/架次号
             main_code, head_code_raw, main_box = self._extract_codes(text_with_positions)
             head_code, head_decision_tag = self._resolve_head_code_with_fixed_mode(head_code_raw)
+            fixed_head_snapshot = self._normalize_head_code(self.fixed_head_input.text()) if hasattr(self, "fixed_head_input") else ""
             self.detected_main_code = main_code
             self.detected_head_code = head_code
 
@@ -980,6 +980,9 @@ class MainWindow(QMainWindow):
             self._last_recog_main_box = main_box
             self._last_recog_main_code = main_code
             self._last_recog_head_code = head_code
+            self._last_recog_head_code_raw = head_code_raw
+            self._last_recog_head_decision_tag = head_decision_tag
+            self._last_recog_fixed_head_code = fixed_head_snapshot
 
             image_to_save = self._build_captured_image(
                 frame_snapshot,
@@ -988,6 +991,9 @@ class MainWindow(QMainWindow):
                 head_code,
                 main_box,
                 manual_main_code=None,
+                head_decision_tag=head_decision_tag,
+                recognized_head_code=head_code_raw,
+                fixed_head_code=fixed_head_snapshot,
             )
             try:
                 h, w, ch = image_to_save.shape
@@ -1042,11 +1048,12 @@ class MainWindow(QMainWindow):
                         head_code,
                         main_box,
                         manual_main_code=self.manual_confirmed_main_code,
+                        head_decision_tag=head_decision_tag,
+                        recognized_head_code=head_code_raw,
+                        fixed_head_code=fixed_head_snapshot,
                     )
                 except Exception:
                     pass
-
-            self.copy_head_button.setEnabled(bool(head_code))
 
             # 保存记录到数据库（保存带标注的图像）
             try:
@@ -1447,7 +1454,46 @@ class MainWindow(QMainWindow):
         except Exception:
             return f"图号: {code}"
 
-    def _build_captured_image(self, base_frame, text_with_positions, main_code, head_code, main_box, manual_main_code=None):
+    def _build_head_mode_overlay_suffix(
+        self,
+        head_decision_tag: str,
+        *,
+        recognized_head_code: str = None,
+        fixed_head_code: str = None,
+        effective_head_code: str = None,
+    ):
+        """返回固定架次号模式在“架次号”行后追加的中文括号备注。"""
+        tag = (head_decision_tag or "normal").strip().lower()
+        if tag == "normal":
+            return ""
+
+        rec = self._normalize_head_code(recognized_head_code) if recognized_head_code else ""
+        fixed = self._normalize_head_code(fixed_head_code) if fixed_head_code else ""
+        eff = self._normalize_head_code(effective_head_code) if effective_head_code else ""
+        if tag == "fixed_equal":
+            return "（固定模式：识别=固定）"
+        if tag == "fixed_only":
+            return "（固定模式：仅使用固定架次号）"
+        if tag == "fixed_chosen":
+            return f"（固定模式：冲突，识别={rec or '<无>'}，采用固定={eff or '<无>'}）"
+        if tag == "recognized_chosen":
+            return f"（固定模式：冲突，识别={rec or '<无>'}，采用识别={eff or '<无>'}）"
+        if tag == "fixed_invalid":
+            return "（固定模式：固定架次号无效，回退识别值）"
+        return f"（固定模式：{tag}）"
+
+    def _build_captured_image(
+        self,
+        base_frame,
+        text_with_positions,
+        main_code,
+        head_code,
+        main_box,
+        manual_main_code=None,
+        head_decision_tag: str = "normal",
+        recognized_head_code: str = None,
+        fixed_head_code: str = None,
+    ):
         """构建用于保存的带标注图像：
         - 叠加所有文本框标注
         - 高亮图号框
@@ -1482,37 +1528,70 @@ class MainWindow(QMainWindow):
 
             # 在左上角绘制结果信息
             try:
-                # 使用 ASCII 标签，避免 OpenCV 字体无法渲染中文导致的问号
-                overlay_lines = [f"TUHAO: {main_code or '<NONE>'}"]
+                overlay_lines = [f"图号: {main_code or '<无>'}"]
                 if manual_main_code:
-                    overlay_lines.append(f"MANUAL: {manual_main_code}")
-                overlay_lines.append(f"JIACI: {head_code or '<NONE>'}")
+                    overlay_lines.append(f"人工确认图号: {manual_main_code}")
+                head_suffix = self._build_head_mode_overlay_suffix(
+                    head_decision_tag,
+                    recognized_head_code=recognized_head_code,
+                    fixed_head_code=fixed_head_code,
+                    effective_head_code=head_code,
+                )
+                overlay_lines.append(f"架次号: {head_code or '<无>'}{head_suffix}")
                 from datetime import datetime
-                overlay_lines.append(f"TIME: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                overlay_lines.append(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                # 字体缩小约 30%，线条更细
-                scale = 0.42
-                thickness = 1
+                # 使用 PIL 绘制中文，避免 OpenCV 默认字体不支持中文
+                from PIL import Image, ImageDraw, ImageFont
+
+                pil_img = Image.fromarray(cv2.cvtColor(image_to_save, cv2.COLOR_BGR2RGB)).convert("RGBA")
+                text_layer = Image.new("RGBA", pil_img.size, (0, 0, 0, 0))
+                draw = ImageDraw.Draw(text_layer)
+
+                font_size = 16
+                font_obj = None
+                font_candidates = [
+                    r"C:\Windows\Fonts\msyh.ttc",
+                    r"C:\Windows\Fonts\msyhbd.ttc",
+                    r"C:\Windows\Fonts\simhei.ttf",
+                    r"C:\Windows\Fonts\simsun.ttc",
+                ]
+                for fp in font_candidates:
+                    if os.path.exists(fp):
+                        try:
+                            font_obj = ImageFont.truetype(fp, font_size)
+                            break
+                        except Exception:
+                            pass
+                if font_obj is None:
+                    font_obj = ImageFont.load_default()
+
                 margin = 10
                 line_gap = 6
 
                 # 计算背景框大小
-                text_sizes = [cv2.getTextSize(t, font, scale, thickness)[0] for t in overlay_lines]
+                text_sizes = []
+                for t in overlay_lines:
+                    bx = draw.textbbox((0, 0), t, font=font_obj)
+                    text_sizes.append((int(bx[2] - bx[0]), int(bx[3] - bx[1])))
                 box_width = max(w for w, h in text_sizes) + margin * 2
                 box_height = sum(h for w, h in text_sizes) + margin * 2 + line_gap * (len(text_sizes) - 1)
 
-                # 背景与边框
-                cv2.rectangle(image_to_save, (5, 5), (5 + box_width, 5 + box_height), (255, 255, 255), cv2.FILLED)
-                cv2.rectangle(image_to_save, (5, 5), (5 + box_width, 5 + box_height), (0, 0, 0), 1)
+                # 背景与边框：白底 80% 透明
+                x1, y1 = 5, 5
+                x2, y2 = 5 + box_width, 5 + box_height
+                draw.rectangle([(x1, y1), (x2, y2)], fill=(255, 255, 255, 204), outline=(0, 0, 0, 255), width=1)
 
                 # 绘制文字
                 x = 5 + margin
-                y = 5 + margin + text_sizes[0][1]
+                y = 5 + margin
                 for idx, line in enumerate(overlay_lines):
-                    cv2.putText(image_to_save, line, (x, y), font, scale, (0, 0, 0), thickness, cv2.LINE_AA)
+                    draw.text((x, y), line, font=font_obj, fill=(0, 0, 0, 255))
                     if idx < len(overlay_lines) - 1:
-                        y += text_sizes[idx + 1][1] + line_gap
+                        y += text_sizes[idx][1] + line_gap
+
+                pil_img = Image.alpha_composite(pil_img, text_layer).convert("RGB")
+                image_to_save = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
             except Exception:
                 pass
 
@@ -1697,14 +1776,6 @@ class MainWindow(QMainWindow):
             best = main_candidates[0]
             return best[1], head_candidate, best[2]
         return None, head_candidate, None
-
-    def copy_head_to_clipboard(self):
-        """复制最近一次识别到的架次号到剪贴板。"""
-        if self.detected_head_code:
-            QApplication.clipboard().setText(self.detected_head_code)
-            self.statusBar().showMessage(f"架次号已复制: {self.detected_head_code}", 3000)
-        else:
-            self.statusBar().showMessage("当前无可复制的架次号", 3000)
 
     def add_record(self, image_path: str, main_code: str, head_code: str) -> bool:
         """将识别结果保存到数据库（新结构：main_code/head_code）。"""
@@ -2084,6 +2155,9 @@ class MainWindow(QMainWindow):
                 self._last_recog_head_code,
                 self._last_recog_main_box,
                 manual_main_code=manual,
+                head_decision_tag=self._last_recog_head_decision_tag,
+                recognized_head_code=self._last_recog_head_code_raw,
+                fixed_head_code=self._last_recog_fixed_head_code,
             )
             try:
                 h, w, ch = img.shape

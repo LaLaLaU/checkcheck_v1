@@ -9,6 +9,7 @@ CheckCheck 导管喷码自动核对系统 - 主程序入口
 import sys
 import os
 from PyQt5.QtWidgets import QApplication
+from PyQt5.QtGui import QFont
 import logging
 
 # 确保可以导入其他模块
@@ -23,6 +24,11 @@ def main():
     """
     # 创建QApplication实例
     app = QApplication(sys.argv)
+    # 全局放大基础字体，提升生产现场可读性
+    app_font = QFont(app.font())
+    if app_font.pointSize() < 12:
+        app_font.setPointSize(12)
+    app.setFont(app_font)
     
     # 配置日志记录
     logging.basicConfig(level=logging.DEBUG, 
