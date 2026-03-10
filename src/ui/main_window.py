@@ -1580,7 +1580,7 @@ class MainWindow(QMainWindow):
                 # 背景与边框：白底 80% 透明
                 x1, y1 = 5, 5
                 x2, y2 = 5 + box_width, 5 + box_height
-                draw.rectangle([(x1, y1), (x2, y2)], fill=(255, 255, 255, 204), outline=(0, 0, 0, 255), width=1)
+                draw.rectangle([(x1, y1), (x2, y2)], fill=(255, 255, 255, 160), outline=(0, 0, 0, 255), width=1)
 
                 # 绘制文字
                 x = 5 + margin
@@ -1663,8 +1663,10 @@ class MainWindow(QMainWindow):
 
         layout = QVBoxLayout(dlg)
         title = QLabel("识别到的架次号与固定架次号不一致，请选择使用哪一个：", dlg)
+        title.setObjectName("headConflictTitle")
         title.setWordWrap(True)
         info = QLabel(f"识别到: {recognized_head}    固定值: {fixed_head}", dlg)
+        info.setObjectName("headConflictInfo")
         info.setWordWrap(True)
         layout.addWidget(title)
         layout.addWidget(info)
@@ -1673,10 +1675,34 @@ class MainWindow(QMainWindow):
         use_fixed_btn = QPushButton(f"使用固定架次号（{fixed_head}）", dlg)
         use_rec_btn = QPushButton(f"使用识别架次号（{recognized_head}）", dlg)
         for b in (use_fixed_btn, use_rec_btn):
-            b.setMinimumHeight(40)
+            b.setMinimumHeight(42)
             b.setAutoDefault(True)
+            b.setFocusPolicy(Qt.StrongFocus)
             btn_row.addWidget(b)
         layout.addLayout(btn_row)
+
+        dlg.setStyleSheet(
+            "QLabel#headConflictTitle { font-size: 16px; font-weight: 700; color: #1f1f1f; }"
+            "QLabel#headConflictInfo { color: #595959; }"
+            "QPushButton {"
+            "  background-color: #f5f5f5;"
+            "  color: #262626;"
+            "  border: 2px solid #d9d9d9;"
+            "  border-radius: 6px;"
+            "  padding: 8px 14px;"
+            "  font-size: 14px;"
+            "}"
+            "QPushButton:focus {"
+            "  background-color: #cf1322;"
+            "  color: #ffffff;"
+            "  border: 3px solid #820014;"
+            "  font-weight: 700;"
+            "}"
+            "QPushButton:pressed {"
+            "  background-color: #a8071a;"
+            "  color: #ffffff;"
+            "}"
+        )
 
         result = {"choice": "fixed"}
 
