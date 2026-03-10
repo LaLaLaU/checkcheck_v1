@@ -1,5 +1,13 @@
 @echo off
 setlocal
+
+rem Self-elevate to Administrator when launched by double-click.
+net session >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    exit /b
+)
+
 pushd %~dp0
 
 rem Ensure UTF-8 console/output
