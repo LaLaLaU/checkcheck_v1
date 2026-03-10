@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-    QPushButton, QLabel, QFileDialog, QMessageBox,
+    QPushButton, QLabel, QFileDialog, QMessageBox, QDialog,
     QSplitter, QFrame, QGroupBox, QProgressDialog,
     QApplication, QFormLayout, QStyle, QComboBox, QTableWidgetItem, QTableWidget, QCheckBox, QSizePolicy, QShortcut
 )
@@ -118,8 +118,8 @@ class VendorPushWorker(QObject):
     """后台串行执行喷码软件唤起/载入/填入，避免阻塞主线程 UI。"""
     finished = pyqtSignal(str, str)  # (level: success|warning|error, message)
 
-    @pyqtSlot(str, str, str, str)
-    def run_push(self, char_file: str, norm_head: str, exe_path: str, title_re: str):
+    @pyqtSlot(str, str, str, str, bool)
+    def run_push(self, char_file: str, norm_head: str, exe_path: str, title_re: str, main_only_no_head: bool):
         try:
             from src.utils.vendor_ui_driver import VendorUIDriver, UIDriverConfig
         except Exception as ie:
@@ -159,6 +159,15 @@ class VendorPushWorker(QObject):
             self.finished.emit("warning", f"状态: 字符文件打开失败: {e}")
             return
 
+        if main_only_no_head:
+            try:
+                drv.transmit()
+            except Exception as e:
+                self.finished.emit("warning", f"状态: 仅喷图号模式传输失败: {e}")
+                return
+            self.finished.emit("success", "状态: 未识别到架次号，已按“只喷图号”执行并传输")
+            return
+
         if norm_head:
             try:
                 drv.fill_sortie(norm_head)
@@ -184,8 +193,8 @@ class MainWindow(QMainWindow):
     """
     应用程序主窗口类
     """
-    # 自动唤起/填入任务：char_file, normalized_head_code, exe_path, title_re
-    vendor_push_requested = pyqtSignal(str, str, str, str)
+    # 自动唤起/填入任务：char_file, normalized_head_code, exe_path, title_re, main_only_no_head
+    vendor_push_requested = pyqtSignal(str, str, str, str, bool)
     
     def __init__(self):
         """
@@ -1834,7 +1843,7 @@ class MainWindow(QMainWindow):
             exe_path = self._infer_vendor_exe_from_demo_bat()
         return (exe_path or ""), (title_re or r'.*(VJ-RT1|WH-VJ1000).*')
 
-    def _enqueue_vendor_push(self, head_code: str = None):
+    def _enqueue_vendor_push(self, head_code: str = None, *, main_only_no_head: bool = False):
         """把自动唤起/填入任务放入后台队列，不阻塞当前识别 UI。"""
         if not self.matched_char_file:
             return
@@ -1846,11 +1855,14 @@ class MainWindow(QMainWindow):
         worker = getattr(self, "vendor_push_worker", None)
         if not thread or not worker or not thread.isRunning():
             logger.warning("后台喷码线程不可用，降级为同步执行。")
-            self._open_matched_charfile(interactive=False, head_code=norm_head)
+            self._open_matched_charfile(interactive=False, head_code=norm_head, main_only_no_head=main_only_no_head)
             return
 
-        self._set_status("状态: 已匹配字符文件，后台正在唤起并写入...", self.status_warning_bg)
-        self.vendor_push_requested.emit(self.matched_char_file, norm_head, exe_path, title_re)
+        if main_only_no_head:
+            self._set_status("状态: 未识别到架次号，后台按“只喷图号”执行中...", self.status_warning_bg)
+        else:
+            self._set_status("状态: 已匹配字符文件，后台正在唤起并写入...", self.status_warning_bg)
+        self.vendor_push_requested.emit(self.matched_char_file, norm_head, exe_path, title_re, bool(main_only_no_head))
 
     @pyqtSlot(str, str)
     def _on_vendor_push_finished(self, level: str, message: str):
@@ -1890,7 +1902,7 @@ class MainWindow(QMainWindow):
             self.charfile_label.setText("字符文件: <匹配出错>")
             self.open_charfile_button.setEnabled(False)
 
-    def _open_matched_charfile(self, *, interactive: bool, head_code: str = None) -> bool:
+    def _open_matched_charfile(self, *, interactive: bool, head_code: str = None, main_only_no_head: bool = False) -> bool:
         """打开匹配到的字符文件，并在提供架次号时自动写入。interactive=False 时仅记录日志，不弹窗。"""
         try:
             if not self.matched_char_file:
@@ -1936,6 +1948,16 @@ class MainWindow(QMainWindow):
                 raise
             drv.open_char_file(self.matched_char_file)
             norm_head = self._normalize_head_code(head_code) if head_code else ""
+            if main_only_no_head:
+                try:
+                    drv.transmit()
+                except Exception as e:
+                    if interactive:
+                        QMessageBox.warning(self, "传输失败", f"仅喷图号模式传输失败：{e}")
+                    self._set_status("状态: 仅喷图号模式传输失败", self.status_warning_bg)
+                    return False
+                self._set_status("状态: 未识别到架次号，已按“只喷图号”执行并传输", self.status_success_bg)
+                return True
             if norm_head:
                 try:
                     drv.fill_sortie(norm_head)
@@ -1971,11 +1993,88 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "打开失败", f"无法打开字符文件：{e}")
             return False
 
+    def _prompt_no_head_action(self) -> str:
+        """未识别到架次号时，询问是重识别还是只喷图号。"""
+        dlg = QDialog(self)
+        dlg.setModal(True)
+        dlg.setWindowTitle("未识别到架次号")
+        dlg.setMinimumWidth(460)
+
+        layout = QVBoxLayout(dlg)
+        title = QLabel("没有识别到架次号，是否继续？", dlg)
+        title.setObjectName("noHeadTitle")
+        title.setWordWrap(True)
+        info = QLabel("默认选项为“重新识别”（按 Enter），不会自动触发识别。", dlg)
+        info.setObjectName("noHeadInfo")
+        info.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(info)
+
+        btn_row = QHBoxLayout()
+        retry_btn = QPushButton("重新识别（默认/回车）", dlg)
+        main_only_btn = QPushButton("只喷图号", dlg)
+        for b in (retry_btn, main_only_btn):
+            b.setMinimumHeight(42)
+            b.setAutoDefault(True)
+            b.setFocusPolicy(Qt.StrongFocus)
+            btn_row.addWidget(b)
+        layout.addLayout(btn_row)
+
+        dlg.setStyleSheet(
+            "QLabel#noHeadTitle { font-size: 16px; font-weight: 700; color: #1f1f1f; }"
+            "QLabel#noHeadInfo { color: #595959; }"
+            "QPushButton {"
+            "  background-color: #f5f5f5;"
+            "  color: #262626;"
+            "  border: 2px solid #d9d9d9;"
+            "  border-radius: 6px;"
+            "  padding: 8px 14px;"
+            "  font-size: 14px;"
+            "}"
+            "QPushButton:focus {"
+            "  background-color: #cf1322;"
+            "  color: #ffffff;"
+            "  border: 3px solid #820014;"
+            "  font-weight: 700;"
+            "}"
+            "QPushButton:pressed {"
+            "  background-color: #a8071a;"
+            "  color: #ffffff;"
+            "}"
+        )
+
+        result = {"choice": "retry"}
+
+        def _choose_retry():
+            result["choice"] = "retry"
+            dlg.accept()
+
+        def _choose_main_only():
+            result["choice"] = "main_only"
+            dlg.accept()
+
+        retry_btn.clicked.connect(_choose_retry)
+        main_only_btn.clicked.connect(_choose_main_only)
+        dlg.rejected.connect(_choose_retry)  # Esc/关闭按钮都回退到“重新识别”
+
+        retry_btn.setDefault(True)
+        retry_btn.setFocus()
+        dlg.exec_()
+        return result["choice"]
+
     def _maybe_auto_open_charfile(self, main_code: str, head_code: str = None):
         """匹配成功后自动唤起喷码软件，并自动写入架次号。"""
         if not self.auto_open_charfile_on_match:
             return
         if not main_code or not self.matched_char_file:
+            return
+        norm_head = self._normalize_head_code(head_code) if head_code else ""
+        if not norm_head:
+            action = self._prompt_no_head_action()
+            if action == "main_only":
+                self._enqueue_vendor_push(head_code="", main_only_no_head=True)
+            else:
+                self._set_status("状态: 未识别到架次号；请调整后手动点击“开始识别”", self.status_warning_bg)
             return
         self._enqueue_vendor_push(head_code=head_code)
 
@@ -2000,6 +2099,14 @@ class MainWindow(QMainWindow):
 
     def on_open_charfile(self):
         """通过自动化驱动喷码软件打开匹配到的字符文件。"""
+        norm_head = self._normalize_head_code(self.detected_head_code) if self.detected_head_code else ""
+        if not norm_head:
+            action = self._prompt_no_head_action()
+            if action == "main_only":
+                self._open_matched_charfile(interactive=True, head_code="", main_only_no_head=True)
+            else:
+                self._set_status("状态: 未识别到架次号；请调整后手动点击“开始识别”", self.status_warning_bg)
+            return
         self._open_matched_charfile(interactive=True, head_code=self.detected_head_code)
 
     def _init_sounds(self):
