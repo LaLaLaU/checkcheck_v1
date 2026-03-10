@@ -8,13 +8,16 @@ CheckCheck 导管喷码自动核对系统 - 主窗口
 
 import os
 import sys
+import html
+import difflib
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-    QPushButton, QLabel, QFileDialog, QMessageBox, QDialog, QInputDialog,
+    QPushButton, QLabel, QFileDialog, QMessageBox, QDialog,
     QSplitter, QFrame, QGroupBox, QProgressDialog,
-    QApplication, QFormLayout, QStyle, QComboBox, QTableWidgetItem, QTableWidget, QCheckBox, QSizePolicy, QShortcut
+    QApplication, QFormLayout, QStyle, QComboBox, QTableWidgetItem, QTableWidget, QCheckBox, QSizePolicy, QShortcut,
+    QHeaderView, QAbstractItemView
 )
 from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QImageReader, QPalette, QColor, QKeySequence
 from PyQt5.QtCore import Qt, QSize, QMimeData, pyqtSignal, pyqtSlot, QObject, QThread, QTimer, QUrl, QEvent
@@ -235,6 +238,12 @@ class MainWindow(QMainWindow):
         self._last_auto_open_signature = None
         self.vendor_push_thread = None
         self.vendor_push_worker = None
+        self.manual_confirmed_main_code = None
+        self._last_recog_snapshot = None
+        self._last_recog_text_with_positions = None
+        self._last_recog_main_box = None
+        self._last_recog_main_code = None
+        self._last_recog_head_code = None
 
         # 编译正则：架次号与图号
         self.HEAD_REGEX_STRICT = re.compile(r'^[A-Z]{1,3}\d{2,4}$')
@@ -950,7 +959,21 @@ class MainWindow(QMainWindow):
             self.detected_head_code = head_code
 
             # 大图显示识别结果；保存图与大图统一：同一快照、同一渲染函数
-            image_to_save = self._build_captured_image(frame_snapshot, text_with_positions, main_code, head_code, main_box)
+            self.manual_confirmed_main_code = None
+            self._last_recog_snapshot = frame_snapshot.copy()
+            self._last_recog_text_with_positions = list(text_with_positions or [])
+            self._last_recog_main_box = main_box
+            self._last_recog_main_code = main_code
+            self._last_recog_head_code = head_code
+
+            image_to_save = self._build_captured_image(
+                frame_snapshot,
+                text_with_positions,
+                main_code,
+                head_code,
+                main_box,
+                manual_main_code=None,
+            )
             try:
                 h, w, ch = image_to_save.shape
                 bytes_per_line = ch * w
@@ -981,6 +1004,20 @@ class MainWindow(QMainWindow):
             # 图号 → 匹配字符文件（相机路径），并自动写入架次号
             self._try_match_charfile(main_code, head_code)
 
+            # 若发生人工确认，刷新保存图内容，确保“人工确认图号”被落图并持久化
+            if self.manual_confirmed_main_code:
+                try:
+                    image_to_save = self._build_captured_image(
+                        frame_snapshot,
+                        text_with_positions,
+                        main_code,
+                        head_code,
+                        main_box,
+                        manual_main_code=self.manual_confirmed_main_code,
+                    )
+                except Exception:
+                    pass
+
             self.copy_head_button.setEnabled(bool(head_code))
 
             # 保存记录到数据库（保存带标注的图像）
@@ -991,7 +1028,13 @@ class MainWindow(QMainWindow):
                 save_path = os.path.join(capture_dir, filename)
                 cv2.imwrite(save_path, image_to_save)
                 from src.utils.database_manager import add_history_record
-                add_history_record(save_path, main_code or "", head_code or "")
+                main_code_to_save = main_code or ""
+                if self.manual_confirmed_main_code:
+                    if main_code_to_save:
+                        main_code_to_save = f"{main_code_to_save} | 人工确认:{self.manual_confirmed_main_code}"
+                    else:
+                        main_code_to_save = f"人工确认:{self.manual_confirmed_main_code}"
+                add_history_record(save_path, main_code_to_save, head_code or "")
             except Exception as e:
                 logger.error(f"Failed to save simplified camera record: {e}", exc_info=True)
 
@@ -1376,7 +1419,7 @@ class MainWindow(QMainWindow):
         except Exception:
             return f"图号: {code}"
 
-    def _build_captured_image(self, base_frame, text_with_positions, main_code, head_code, main_box):
+    def _build_captured_image(self, base_frame, text_with_positions, main_code, head_code, main_box, manual_main_code=None):
         """构建用于保存的带标注图像：
         - 叠加所有文本框标注
         - 高亮图号框
@@ -1412,10 +1455,10 @@ class MainWindow(QMainWindow):
             # 在左上角绘制结果信息
             try:
                 # 使用 ASCII 标签，避免 OpenCV 字体无法渲染中文导致的问号
-                overlay_lines = [
-                    f"TUHAO: {main_code or '<NONE>'}",
-                    f"JIACI: {head_code or '<NONE>'}"
-                ]
+                overlay_lines = [f"TUHAO: {main_code or '<NONE>'}"]
+                if manual_main_code:
+                    overlay_lines.append(f"MANUAL: {manual_main_code}")
+                overlay_lines.append(f"JIACI: {head_code or '<NONE>'}")
                 from datetime import datetime
                 overlay_lines.append(f"TIME: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -1873,29 +1916,181 @@ class MainWindow(QMainWindow):
         else:
             self._set_status(message, self.status_error_bg)
 
+    def _candidate_code_for_display(self, full_path: str, target_norm: str) -> str:
+        """从候选文件路径推断用于展示/比对的图号文本。"""
+        from pathlib import Path
+        from src.utils.charfile_matcher import normalize_code
+
+        p = Path(full_path)
+        cands = []
+        for raw in (p.name, p.stem if p.suffix else p.name):
+            norm = normalize_code(raw)
+            if norm and norm not in cands:
+                cands.append(norm)
+        if not cands:
+            return ""
+        if not target_norm:
+            return cands[0]
+        return max(cands, key=lambda s: difflib.SequenceMatcher(None, target_norm, s).ratio())
+
+    def _diff_highlight_html(self, target_norm: str, cand_norm: str) -> str:
+        """将候选图号中与识别图号差异的字母/数字高亮为红色。"""
+        t = target_norm or ""
+        c = cand_norm or ""
+        out = []
+        max_len = max(len(t), len(c))
+        for i in range(max_len):
+            tc = t[i] if i < len(t) else ""
+            cc = c[i] if i < len(c) else ""
+            if cc:
+                esc = html.escape(cc)
+                if tc == cc:
+                    out.append(f"<span>{esc}</span>")
+                else:
+                    # 字母/数字差异重点标红
+                    if (tc and tc.isalnum()) or cc.isalnum():
+                        out.append(f"<span style='color:#cf1322;font-weight:700;'>{esc}</span>")
+                    else:
+                        out.append(f"<span style='color:#d46b08;font-weight:700;'>{esc}</span>")
+            else:
+                # 候选缺失字符（识别端有）也标记
+                if tc and tc.isalnum():
+                    out.append("<span style='color:#cf1322;font-weight:700;'>□</span>")
+        if not out:
+            return "<span style='color:#8c8c8c;'>&lt;空&gt;</span>"
+        return "".join(out)
+
+    def _apply_manual_confirmation_preview(self):
+        """人工确认候选后，刷新大预览并在图号下追加一行人工确认信息。"""
+        try:
+            manual = (self.manual_confirmed_main_code or "").strip()
+            if not manual:
+                return
+            if self._last_recog_snapshot is None:
+                return
+
+            img = self._build_captured_image(
+                self._last_recog_snapshot,
+                self._last_recog_text_with_positions,
+                self._last_recog_main_code,
+                self._last_recog_head_code,
+                self._last_recog_main_box,
+                manual_main_code=manual,
+            )
+            try:
+                h, w, ch = img.shape
+                bytes_per_line = ch * w
+                qt_image = QImage(img.data, w, h, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+                pixmap_marked = QPixmap.fromImage(qt_image)
+                pixmap_marked = self._resize_pixmap(pixmap_marked)
+                self.image_label.setPixmap(pixmap_marked)
+            except Exception:
+                pass
+
+            try:
+                main_html = self._generate_main_highlight_html(self._last_recog_main_code) if self._last_recog_main_code else "图号: <未检测到>"
+                self.label_text_result.setText(
+                    f"{main_html}<br/><span style='color:#cf1322; font-weight:700;'>人工确认图号: {manual}</span>"
+                )
+            except Exception:
+                self.label_text_result.setText(
+                    f"图号: {self._last_recog_main_code or '<未检测到>'}\n人工确认图号: {manual}"
+                )
+        except Exception as e:
+            logger.warning(f"刷新人工确认预览失败: {e}")
+
     def _prompt_pick_charfile_candidate(self, main_code: str, ranked):
-        """当图号匹配非满分时，人工选择候选字符文件。"""
+        """当图号匹配非满分时，显示候选表格，支持双击即选。"""
         try:
             if not ranked:
                 return None
             from pathlib import Path
-            items = []
-            mapping = {}
-            for i, (path, score) in enumerate(ranked, 1):
-                p = Path(path)
-                label = f"{i}. {p.name} | score={float(score):.2f} | {p.parent.name}"
-                items.append(label)
-                mapping[label] = (str(p), float(score))
-            chosen, ok = QInputDialog.getItem(
-                self,
-                "候选字符文件选择",
-                f"图号识别结果“{main_code}”非满分，请选择要加载的字符文件：",
-                items,
-                0,
-                False,
+            from src.utils.charfile_matcher import normalize_code
+
+            target_norm = normalize_code(main_code)
+            dlg = QDialog(self)
+            dlg.setModal(True)
+            dlg.setWindowTitle("候选字符文件选择")
+            dlg.resize(1080, 560)
+
+            root = QVBoxLayout(dlg)
+            tip = QLabel(f"图号识别结果“{main_code}”非满分，请选择要加载的字符文件（双击可直接确认）：", dlg)
+            tip.setWordWrap(True)
+            root.addWidget(tip)
+
+            table = QTableWidget(len(ranked), 4, dlg)
+            table.setHorizontalHeaderLabels(["#", "分数", "文件名(差异高亮)", "完整路径"])
+            table.setAlternatingRowColors(True)
+            table.setSelectionBehavior(QAbstractItemView.SelectRows)
+            table.setSelectionMode(QAbstractItemView.SingleSelection)
+            table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            table.setWordWrap(False)
+            table.verticalHeader().setVisible(False)
+            table.setSortingEnabled(False)
+            table.setStyleSheet(
+                "QTableWidget { font-size: 16px; }"
+                "QHeaderView::section { font-size: 15px; font-weight: 700; }"
             )
-            if ok and chosen in mapping:
-                return mapping[chosen]
+            table.verticalHeader().setDefaultSectionSize(44)
+
+            hdr = table.horizontalHeader()
+            hdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+            hdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            hdr.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+            hdr.setSectionResizeMode(3, QHeaderView.Stretch)
+
+            picked = {"value": None}
+
+            for row, (path, score) in enumerate(ranked):
+                p = Path(path)
+                score_f = float(score)
+                cand_norm = self._candidate_code_for_display(str(p), target_norm)
+
+                table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
+                table.setItem(row, 1, QTableWidgetItem(f"{score_f:.2f}"))
+                table.setItem(row, 3, QTableWidgetItem(str(p)))
+
+                lbl = QLabel(dlg)
+                lbl.setTextFormat(Qt.RichText)
+                lbl.setText(self._diff_highlight_html(target_norm, cand_norm))
+                lbl.setStyleSheet("font-size: 20px; font-weight: 800;")
+                lbl.setToolTip(f"文件名: {p.name}\n识别图号: {target_norm}\n候选图号: {cand_norm}")
+                table.setCellWidget(row, 2, lbl)
+
+            root.addWidget(table)
+
+            btn_row = QHBoxLayout()
+            btn_row.addStretch(1)
+            ok_btn = QPushButton("确定（Enter）", dlg)
+            cancel_btn = QPushButton("取消（Esc）", dlg)
+            ok_btn.setDefault(True)
+            ok_btn.setAutoDefault(True)
+            btn_row.addWidget(ok_btn)
+            btn_row.addWidget(cancel_btn)
+            root.addLayout(btn_row)
+
+            def _accept_selected():
+                row = table.currentRow()
+                if row < 0 and table.rowCount() > 0:
+                    row = 0
+                if row < 0:
+                    picked["value"] = None
+                else:
+                    path, score = ranked[row]
+                    picked["value"] = (str(path), float(score))
+                dlg.accept()
+
+            ok_btn.clicked.connect(_accept_selected)
+            cancel_btn.clicked.connect(dlg.reject)
+            table.cellDoubleClicked.connect(lambda _r, _c: _accept_selected())
+
+            if table.rowCount() > 0:
+                table.selectRow(0)
+                table.setCurrentCell(0, 0)
+                table.setFocus()
+
+            if dlg.exec_() == QDialog.Accepted:
+                return picked["value"]
         except Exception as e:
             logger.warning(f"候选字符文件选择弹窗失败: {e}")
         return None
@@ -1903,13 +2098,14 @@ class MainWindow(QMainWindow):
     def _try_match_charfile(self, main_code: str, head_code: str = None, *, auto_push: bool = True):
         """根据图号匹配字符文件，更新 UI 与可用操作。"""
         try:
+            self.manual_confirmed_main_code = None
             if not main_code:
                 self.matched_char_file = None
                 self.matched_char_score = 0.0
                 self.charfile_label.setText("字符文件: <未匹配>")
                 self.open_charfile_button.setEnabled(False)
                 return
-            from src.utils.charfile_matcher import find_best_charfile, find_top_charfiles
+            from src.utils.charfile_matcher import find_best_charfile, find_top_charfiles, normalize_code
             path, score = find_best_charfile(main_code)
             if path is not None:
                 selected_path = str(path)
@@ -1927,6 +2123,10 @@ class MainWindow(QMainWindow):
                         self._set_status("状态: 图号非满分，已取消候选选择，请重新识别", self.status_warning_bg)
                         return
                     selected_path, selected_score = picked
+                    self.manual_confirmed_main_code = self._candidate_code_for_display(
+                        str(selected_path), normalize_code(main_code)
+                    ) or os.path.basename(str(selected_path))
+                    self._apply_manual_confirmation_preview()
 
                 self.matched_char_file = selected_path
                 self.matched_char_score = selected_score
@@ -1943,6 +2143,10 @@ class MainWindow(QMainWindow):
                     picked = self._prompt_pick_charfile_candidate(main_code, ranked) if ranked else None
                     if picked is not None:
                         selected_path, selected_score = picked
+                        self.manual_confirmed_main_code = self._candidate_code_for_display(
+                            str(selected_path), normalize_code(main_code)
+                        ) or os.path.basename(str(selected_path))
+                        self._apply_manual_confirmation_preview()
                         self.matched_char_file = str(selected_path)
                         self.matched_char_score = float(selected_score)
                         from pathlib import Path
