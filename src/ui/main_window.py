@@ -126,10 +126,17 @@ class VendorPushWorker(QObject):
             self.finished.emit("warning", f"状态: 自动唤起失败（驱动导入）: {ie}")
             return
 
+        try:
+            from src.utils.config import get_precise_insert_compensation_cols
+            precise_comp = int(get_precise_insert_compensation_cols())
+        except Exception:
+            precise_comp = 0
+
         cfg = UIDriverConfig(
             exe_path=(exe_path or None),
             title_re=(title_re or r'.*(VJ-RT1|WH-VJ1000).*'),
             monitor_timeout_s=3.0,
+            precise_insert_compensation_cols=precise_comp,
         )
         drv = VendorUIDriver(cfg)
 
@@ -1901,8 +1908,18 @@ class MainWindow(QMainWindow):
 
             # 读取配置
             exe_path, title_re = self._resolve_vendor_launch_config()
+            try:
+                from src.utils.config import get_precise_insert_compensation_cols
+                precise_comp = int(get_precise_insert_compensation_cols())
+            except Exception:
+                precise_comp = 0
 
-            cfg = UIDriverConfig(exe_path=exe_path, title_re=title_re, monitor_timeout_s=3.0)
+            cfg = UIDriverConfig(
+                exe_path=exe_path,
+                title_re=title_re,
+                monitor_timeout_s=3.0,
+                precise_insert_compensation_cols=precise_comp,
+            )
             drv = VendorUIDriver(cfg)
             try:
                 drv.ensure_app()

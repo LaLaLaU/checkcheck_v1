@@ -17,6 +17,8 @@ if not exist "%PADDLE_HOME%" mkdir "%PADDLE_HOME%" >nul 2>&1
 
 rem Force OCR to use local model folders under current directory
 set CHECKCHECK_OCR_MODELS=%CD%
+rem Precise insert compensation (equivalent to demo arg: --precise-comp 10)
+set CHECKCHECK_PRECISE_COMP=10
 
 if exist env\Scripts\conda-unpack.exe (
     if not exist env\.unpacked (

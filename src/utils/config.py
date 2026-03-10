@@ -98,3 +98,18 @@ def get_match_threshold() -> float:
         return float(cfg.get('char_match_threshold', 0.8))
     except Exception:
         return 0.8
+
+
+def get_precise_insert_compensation_cols() -> int:
+    """精确插入列补偿（正数右移，负数左移）。"""
+    v = os.environ.get('CHECKCHECK_PRECISE_COMP')
+    if v:
+        try:
+            return int(v)
+        except Exception:
+            pass
+    cfg = _load_config_file()
+    try:
+        return int(cfg.get('precise_insert_compensation_cols', 0))
+    except Exception:
+        return 0
