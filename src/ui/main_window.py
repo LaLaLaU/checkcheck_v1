@@ -2099,6 +2099,39 @@ class MainWindow(QMainWindow):
             logger.warning(f"候选字符文件选择弹窗失败: {e}")
         return None
 
+    def _confirm_candidate_for_main_code(self, main_code: str, *, force: bool = False) -> bool:
+        """按需要弹出候选列表并应用人工确认结果。"""
+        try:
+            if not main_code:
+                return False
+            if (not force) and self.matched_char_file and float(self.matched_char_score or 0.0) >= 1.0:
+                return True
+
+            from src.utils.charfile_matcher import find_top_charfiles, normalize_code
+            ranked = find_top_charfiles(main_code, top_k=8)
+            picked = self._prompt_pick_charfile_candidate(main_code, ranked) if ranked else None
+            if picked is None:
+                self._set_status("状态: 已取消候选选择，请重新识别", self.status_warning_bg)
+                return False
+
+            selected_path, selected_score = picked
+            self.matched_char_file = str(selected_path)
+            self.matched_char_score = float(selected_score)
+            self.manual_confirmed_main_code = self._candidate_code_for_display(
+                str(selected_path), normalize_code(main_code)
+            ) or os.path.basename(str(selected_path))
+            self._apply_manual_confirmation_preview()
+
+            from pathlib import Path
+            self.charfile_label.setText(
+                f"字符文件: {Path(selected_path).name} (score={float(selected_score):.2f}) (已人工确认)"
+            )
+            self.open_charfile_button.setEnabled(True)
+            return True
+        except Exception as e:
+            logger.warning(f"候选人工确认失败: {e}")
+            return False
+
     def _try_match_charfile(self, main_code: str, head_code: str = None, *, auto_push: bool = True):
         """根据图号匹配字符文件，更新 UI 与可用操作。"""
         try:
@@ -2109,61 +2142,21 @@ class MainWindow(QMainWindow):
                 self.charfile_label.setText("字符文件: <未匹配>")
                 self.open_charfile_button.setEnabled(False)
                 return
-            from src.utils.charfile_matcher import find_best_charfile, find_top_charfiles, normalize_code
+            from src.utils.charfile_matcher import find_best_charfile
             path, score = find_best_charfile(main_code)
             if path is not None:
-                selected_path = str(path)
-                selected_score = float(score)
-
-                # 非满分时，先让人工确认候选文件，再继续后续流程。
-                if selected_score < 1.0 and auto_push:
-                    ranked = find_top_charfiles(main_code, top_k=8)
-                    picked = self._prompt_pick_charfile_candidate(main_code, ranked)
-                    if picked is None:
-                        self.matched_char_file = None
-                        self.matched_char_score = 0.0
-                        self.charfile_label.setText("字符文件: <候选未确认>")
-                        self.open_charfile_button.setEnabled(False)
-                        self._set_status("状态: 图号非满分，已取消候选选择，请重新识别", self.status_warning_bg)
-                        return
-                    selected_path, selected_score = picked
-                    self.manual_confirmed_main_code = self._candidate_code_for_display(
-                        str(selected_path), normalize_code(main_code)
-                    ) or os.path.basename(str(selected_path))
-                    self._apply_manual_confirmation_preview()
-
-                self.matched_char_file = selected_path
-                self.matched_char_score = selected_score
+                self.matched_char_file = str(path)
+                self.matched_char_score = float(score)
                 from pathlib import Path
-                hint = " (已人工确认)" if selected_score < 1.0 else ""
-                self.charfile_label.setText(f"字符文件: {Path(selected_path).name} (score={selected_score:.2f}){hint}")
+                self.charfile_label.setText(f"字符文件: {Path(path).name} (score={float(score):.2f})")
                 self.open_charfile_button.setEnabled(True)
-                if auto_push:
-                    self._maybe_auto_open_charfile(main_code, head_code)
             else:
-                # 低于阈值时也给出候选，允许人工确认。
-                if auto_push:
-                    ranked = find_top_charfiles(main_code, top_k=8)
-                    picked = self._prompt_pick_charfile_candidate(main_code, ranked) if ranked else None
-                    if picked is not None:
-                        selected_path, selected_score = picked
-                        self.manual_confirmed_main_code = self._candidate_code_for_display(
-                            str(selected_path), normalize_code(main_code)
-                        ) or os.path.basename(str(selected_path))
-                        self._apply_manual_confirmation_preview()
-                        self.matched_char_file = str(selected_path)
-                        self.matched_char_score = float(selected_score)
-                        from pathlib import Path
-                        self.charfile_label.setText(
-                            f"字符文件: {Path(selected_path).name} (score={float(selected_score):.2f}) (已人工确认)"
-                        )
-                        self.open_charfile_button.setEnabled(True)
-                        self._maybe_auto_open_charfile(main_code, head_code)
-                        return
                 self.matched_char_file = None
                 self.matched_char_score = 0.0
                 self.charfile_label.setText("字符文件: <未匹配>")
                 self.open_charfile_button.setEnabled(False)
+            if auto_push:
+                self._maybe_auto_open_charfile(main_code, head_code)
         except Exception as e:
             logging.getLogger(__name__).error(f"匹配字符文件出错: {e}", exc_info=True)
             self.charfile_label.setText("字符文件: <匹配出错>")
@@ -2333,15 +2326,30 @@ class MainWindow(QMainWindow):
         """匹配成功后自动唤起喷码软件，并自动写入架次号。"""
         if not self.auto_open_charfile_on_match:
             return
-        if not main_code or not self.matched_char_file:
+        if not main_code:
             return
         norm_head = self._normalize_head_code(head_code) if head_code else ""
         if not norm_head:
             action = self._prompt_no_head_action()
             if action == "main_only":
+                # 无架次号：仅在“只喷图号”分支中再进入候选确认。
+                if not self._confirm_candidate_for_main_code(main_code, force=True):
+                    self.matched_char_file = None
+                    self.matched_char_score = 0.0
+                    self.charfile_label.setText("字符文件: <候选未确认>")
+                    self.open_charfile_button.setEnabled(False)
+                    return
                 self._enqueue_vendor_push(head_code="", main_only_no_head=True)
             else:
                 self._set_status("状态: 未识别到架次号；请调整后手动点击“开始识别”", self.status_warning_bg)
+            return
+        # 有架次号：直接进入候选确认（仅非满分/未匹配时弹出）。
+        if not self._confirm_candidate_for_main_code(main_code, force=False):
+            if not self.matched_char_file:
+                self.charfile_label.setText("字符文件: <候选未确认>")
+                self.open_charfile_button.setEnabled(False)
+            return
+        if not self.matched_char_file:
             return
         self._enqueue_vendor_push(head_code=head_code)
 
@@ -2366,13 +2374,18 @@ class MainWindow(QMainWindow):
 
     def on_open_charfile(self):
         """通过自动化驱动喷码软件打开匹配到的字符文件。"""
+        main_code = self.detected_main_code or ""
         norm_head = self._normalize_head_code(self.detected_head_code) if self.detected_head_code else ""
         if not norm_head:
             action = self._prompt_no_head_action()
             if action == "main_only":
+                if not self._confirm_candidate_for_main_code(main_code, force=True):
+                    return
                 self._open_matched_charfile(interactive=True, head_code="", main_only_no_head=True)
             else:
                 self._set_status("状态: 未识别到架次号；请调整后手动点击“开始识别”", self.status_warning_bg)
+            return
+        if not self._confirm_candidate_for_main_code(main_code, force=False):
             return
         self._open_matched_charfile(interactive=True, head_code=self.detected_head_code)
 
