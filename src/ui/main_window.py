@@ -155,9 +155,20 @@ class VendorPushWorker(QObject):
         if norm_head:
             try:
                 drv.fill_sortie(norm_head)
-                self.finished.emit("success", f"状态: 已打开字符文件并写入架次号 {norm_head}")
             except Exception as e:
                 self.finished.emit("warning", f"状态: 已打开字符文件，但架次号写入失败: {e}")
+                return
+            try:
+                drv.insert_text_at_tail(char_file)
+            except Exception as e:
+                self.finished.emit("warning", f"状态: 架次号已写入，但插入文字失败: {e}")
+                return
+            try:
+                drv.transmit()
+            except Exception as e:
+                self.finished.emit("warning", f"状态: 架次号已插入，但传输信息失败: {e}")
+                return
+            self.finished.emit("success", f"状态: 已写入并插入架次号 {norm_head}，已执行传输信息")
         else:
             self.finished.emit("success", "状态: 已在喷码软件中打开字符文件")
 
@@ -1911,11 +1922,26 @@ class MainWindow(QMainWindow):
             if norm_head:
                 try:
                     drv.fill_sortie(norm_head)
-                    self._set_status(f"状态: 已打开字符文件并写入架次号 {norm_head}", self.status_success_bg)
                 except Exception as e:
                     if interactive:
                         QMessageBox.warning(self, "架次号写入失败", f"字符文件已打开，但写入架次号失败：{e}")
                     self._set_status("状态: 已打开字符文件，但架次号写入失败", self.status_warning_bg)
+                    return False
+                try:
+                    drv.insert_text_at_tail(self.matched_char_file)
+                except Exception as e:
+                    if interactive:
+                        QMessageBox.warning(self, "插入文字失败", f"架次号已写入，但插入文字失败：{e}")
+                    self._set_status("状态: 架次号已写入，但插入文字失败", self.status_warning_bg)
+                    return False
+                try:
+                    drv.transmit()
+                except Exception as e:
+                    if interactive:
+                        QMessageBox.warning(self, "传输失败", f"架次号已插入，但传输信息失败：{e}")
+                    self._set_status("状态: 架次号已插入，但传输信息失败", self.status_warning_bg)
+                    return False
+                self._set_status(f"状态: 已写入并插入架次号 {norm_head}，已执行传输信息", self.status_success_bg)
             else:
                 self._set_status("状态: 已在喷码软件中打开字符文件", self.status_success_bg)
             return True

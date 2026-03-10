@@ -840,12 +840,14 @@ class VendorUIDriver:
             pass
         self._sleep(0.06)
 
+        inserted = False
         try:
             ins_frm = self._frame('insert')
             insert_titles = ['插入文字', '插入文本', '鎻掑叆鏂囧瓧']
             try:
                 if self._click_button_by_titles(ins_frm, insert_titles, timeout=0.9):
                     print(f"[drv][{self._ts()}] insert: clicked insert-text button")
+                    inserted = True
                 else:
                     raise RuntimeError("insert-text button not found")
             except Exception:
@@ -865,14 +867,14 @@ class VendorUIDriver:
                         if self._norm_ui_text(str(txt)) in insert_norms:
                             b.click_input()
                             print(f"[drv] insert: clicked inferred '{txt}'")
+                            inserted = True
                             break
                     except Exception:
                         continue
-        except Exception:
-            try:
-                send_keys('{ENTER}')
-            except Exception:
-                pass
+        except Exception as e:
+            raise RuntimeError(f"insert-text failed: {e}")
+        if not inserted:
+            raise RuntimeError("insert-text button not found")
         self._sleep(0.12)
 
     def transmit(self) -> None:
@@ -888,25 +890,17 @@ class VendorUIDriver:
                 try:
                     if (win32gui.IsWindow(self._tx_btn_cached) and
                         win32gui.GetClassName(self._tx_btn_cached) == 'ThunderRT6CommandButton'):
-                        # Capture monitor baseline first, then click.
-                        ctrl, baseline = self._capture_monitor_text()
                         self.app.window(handle=self._tx_btn_cached).click_input()
-                        print("[drv] transmit: clicked cached transmit button")
-                        # Optional: confirm once monitor updates.
-                        if getattr(self.cfg, 'confirm_transmit_on_update', False):
-                            if self.wait_monitor_updated(self.cfg.monitor_timeout_s, baseline):
-                                try:
-                                    self.app.window(handle=self._tx_btn_cached).click_input()
-                                    print("[drv] transmit: re-clicked after monitor update")
-                                except Exception:
-                                    pass
+                        print("[drv] transmit: first click (cached)")
+                        self._sleep(3.0)
+                        self.app.window(handle=self._tx_btn_cached).click_input()
+                        print("[drv] transmit: second click (cached)")
                         self._sleep(0.10)
                         return
                 except Exception:
                     self._tx_btn_cached = None
 
-            # Capture baseline first, then locate and click transmit precisely.
-            ctrl, baseline = self._capture_monitor_text()
+            # Locate transmit button precisely.
             tx_titles = ['传输信息', '发送信息', '浼犺緭淇℃伅']
             btn = None
             for cap in tx_titles:
@@ -928,21 +922,16 @@ class VendorUIDriver:
             except Exception:
                 pass
             btn.click_input()
-            print("[drv] transmit: clicked transmit button")
-            # Optional: confirm once monitor updates.
-            if getattr(self.cfg, 'confirm_transmit_on_update', False):
-                if self.wait_monitor_updated(self.cfg.monitor_timeout_s, baseline):
-                    try:
-                        # If cache is stale, fall back to exact lookup once.
-                        if win32gui and getattr(self, '_tx_btn_cached', None) and win32gui.IsWindow(self._tx_btn_cached):
-                            self.app.window(handle=self._tx_btn_cached).click_input()
-                        else:
-                            clicked = self._click_button_by_titles(self.win, tx_titles, timeout=0.8)
-                            if not clicked:
-                                raise RuntimeError("transmit re-click not found")
-                        print("[drv] transmit: re-clicked after monitor update")
-                    except Exception:
-                        pass
+            print("[drv] transmit: first click")
+            self._sleep(3.0)
+            # Second click: prefer cached handle, then fallback by title scan.
+            if win32gui and getattr(self, '_tx_btn_cached', None) and win32gui.IsWindow(self._tx_btn_cached):
+                self.app.window(handle=self._tx_btn_cached).click_input()
+            else:
+                clicked = self._click_button_by_titles(self.win, tx_titles, timeout=0.8)
+                if not clicked:
+                    raise RuntimeError("transmit second click not found")
+            print("[drv] transmit: second click")
         except Exception as e:
             print(f"[drv] transmit error: {e}")
         self._sleep(0.10)
