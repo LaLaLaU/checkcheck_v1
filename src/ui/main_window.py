@@ -121,8 +121,16 @@ class VendorPushWorker(QObject):
     """后台串行执行喷码软件唤起/载入/填入，避免阻塞主线程 UI。"""
     finished = pyqtSignal(str, str)  # (level: success|warning|error, message)
 
-    @pyqtSlot(str, str, str, str, bool)
-    def run_push(self, char_file: str, norm_head: str, exe_path: str, title_re: str, main_only_no_head: bool):
+    @pyqtSlot(str, str, str, str, bool, bool)
+    def run_push(
+        self,
+        char_file: str,
+        norm_head: str,
+        exe_path: str,
+        title_re: str,
+        main_only_no_head: bool,
+        manual_transmit: bool,
+    ):
         try:
             from src.utils.vendor_ui_driver import VendorUIDriver, UIDriverConfig
         except Exception as ie:
@@ -163,6 +171,9 @@ class VendorPushWorker(QObject):
             return
 
         if main_only_no_head:
+            if manual_transmit:
+                self.finished.emit("success", "状态: 未识别到架次号，已按“只喷图号”执行；请手动点击“传输信息”")
+                return
             try:
                 drv.transmit()
             except Exception as e:
@@ -182,6 +193,9 @@ class VendorPushWorker(QObject):
             except Exception as e:
                 self.finished.emit("warning", f"状态: 架次号已写入，但插入文字失败: {e}")
                 return
+            if manual_transmit:
+                self.finished.emit("success", f"状态: 已写入并插入架次号 {norm_head}；请手动点击“传输信息”")
+                return
             try:
                 drv.transmit()
             except Exception as e:
@@ -196,8 +210,8 @@ class MainWindow(QMainWindow):
     """
     应用程序主窗口类
     """
-    # 自动唤起/填入任务：char_file, normalized_head_code, exe_path, title_re, main_only_no_head
-    vendor_push_requested = pyqtSignal(str, str, str, str, bool)
+    # 自动唤起/填入任务：char_file, normalized_head_code, exe_path, title_re, main_only_no_head, manual_transmit
+    vendor_push_requested = pyqtSignal(str, str, str, str, bool, bool)
     
     def __init__(self):
         """
@@ -364,6 +378,17 @@ class MainWindow(QMainWindow):
         fixed_layout.addWidget(self.fixed_head_input)
         fixed_layout.addStretch(1)
         results_layout.addRow(fixed_widget)
+
+        manual_tx_widget = QWidget()
+        manual_tx_layout = QHBoxLayout(manual_tx_widget)
+        manual_tx_layout.setContentsMargins(0, 0, 0, 0)
+        manual_tx_layout.setSpacing(8)
+        self.manual_transmit_checkbox = QCheckBox("手动传输信息")
+        self.manual_transmit_checkbox.setToolTip("勾选后不自动点击“传输信息”，由人工手动点击")
+        self.manual_transmit_checkbox.setChecked(False)
+        manual_tx_layout.addWidget(self.manual_transmit_checkbox)
+        manual_tx_layout.addStretch(1)
+        results_layout.addRow(manual_tx_widget)
 
         # 再放“图号”行（下方）
         self.label_text_result = QLabel("图号: 等待识别...")
@@ -2080,6 +2105,13 @@ class MainWindow(QMainWindow):
             exe_path = self._infer_vendor_exe_from_demo_bat()
         return (exe_path or ""), (title_re or r'.*(VJ-RT1|WH-VJ1000).*')
 
+    def _is_manual_transmit_enabled(self) -> bool:
+        try:
+            cb = getattr(self, "manual_transmit_checkbox", None)
+            return bool(cb and cb.isChecked())
+        except Exception:
+            return False
+
     def _enqueue_vendor_push(self, head_code: str = None, *, main_only_no_head: bool = False):
         """把自动唤起/填入任务放入后台队列，不阻塞当前识别 UI。"""
         if not self.matched_char_file:
@@ -2087,19 +2119,38 @@ class MainWindow(QMainWindow):
 
         norm_head = self._normalize_head_code(head_code) if head_code else ""
         exe_path, title_re = self._resolve_vendor_launch_config()
+        manual_transmit = self._is_manual_transmit_enabled()
 
         thread = getattr(self, "vendor_push_thread", None)
         worker = getattr(self, "vendor_push_worker", None)
         if not thread or not worker or not thread.isRunning():
             logger.warning("后台喷码线程不可用，降级为同步执行。")
-            self._open_matched_charfile(interactive=False, head_code=norm_head, main_only_no_head=main_only_no_head)
+            self._open_matched_charfile(
+                interactive=False,
+                head_code=norm_head,
+                main_only_no_head=main_only_no_head,
+                manual_transmit=manual_transmit,
+            )
             return
 
         if main_only_no_head:
-            self._set_status("状态: 未识别到架次号，后台按“只喷图号”执行中...", self.status_warning_bg)
+            if manual_transmit:
+                self._set_status("状态: 未识别到架次号，后台按“只喷图号”执行中；请手动传输...", self.status_warning_bg)
+            else:
+                self._set_status("状态: 未识别到架次号，后台按“只喷图号”执行中...", self.status_warning_bg)
         else:
-            self._set_status("状态: 已匹配字符文件，后台正在唤起并写入...", self.status_warning_bg)
-        self.vendor_push_requested.emit(self.matched_char_file, norm_head, exe_path, title_re, bool(main_only_no_head))
+            if manual_transmit:
+                self._set_status("状态: 已匹配字符文件，后台正在唤起并写入；请手动传输...", self.status_warning_bg)
+            else:
+                self._set_status("状态: 已匹配字符文件，后台正在唤起并写入...", self.status_warning_bg)
+        self.vendor_push_requested.emit(
+            self.matched_char_file,
+            norm_head,
+            exe_path,
+            title_re,
+            bool(main_only_no_head),
+            bool(manual_transmit),
+        )
 
     @pyqtSlot(str, str)
     def _on_vendor_push_finished(self, level: str, message: str):
@@ -2366,7 +2417,14 @@ class MainWindow(QMainWindow):
             self.charfile_label.setText("字符文件: <匹配出错>")
             self.open_charfile_button.setEnabled(False)
 
-    def _open_matched_charfile(self, *, interactive: bool, head_code: str = None, main_only_no_head: bool = False) -> bool:
+    def _open_matched_charfile(
+        self,
+        *,
+        interactive: bool,
+        head_code: str = None,
+        main_only_no_head: bool = False,
+        manual_transmit: bool = False,
+    ) -> bool:
         """打开匹配到的字符文件，并在提供架次号时自动写入。interactive=False 时仅记录日志，不弹窗。"""
         try:
             if not self.matched_char_file:
@@ -2413,6 +2471,9 @@ class MainWindow(QMainWindow):
             drv.open_char_file(self.matched_char_file)
             norm_head = self._normalize_head_code(head_code) if head_code else ""
             if main_only_no_head:
+                if manual_transmit:
+                    self._set_status("状态: 未识别到架次号，已按“只喷图号”执行；请手动点击“传输信息”", self.status_success_bg)
+                    return True
                 try:
                     drv.transmit()
                 except Exception as e:
@@ -2437,6 +2498,9 @@ class MainWindow(QMainWindow):
                         QMessageBox.warning(self, "插入文字失败", f"架次号已写入，但插入文字失败：{e}")
                     self._set_status("状态: 架次号已写入，但插入文字失败", self.status_warning_bg)
                     return False
+                if manual_transmit:
+                    self._set_status(f"状态: 已写入并插入架次号 {norm_head}；请手动点击“传输信息”", self.status_success_bg)
+                    return True
                 try:
                     drv.transmit()
                 except Exception as e:
@@ -2585,13 +2649,22 @@ class MainWindow(QMainWindow):
             if action == "main_only":
                 if not self._confirm_candidate_for_main_code(main_code, force=True):
                     return
-                self._open_matched_charfile(interactive=True, head_code="", main_only_no_head=True)
+                self._open_matched_charfile(
+                    interactive=True,
+                    head_code="",
+                    main_only_no_head=True,
+                    manual_transmit=self._is_manual_transmit_enabled(),
+                )
             else:
                 self._set_status("状态: 未识别到架次号；请调整后手动点击“开始识别”", self.status_warning_bg)
             return
         if not self._confirm_candidate_for_main_code(main_code, force=False):
             return
-        self._open_matched_charfile(interactive=True, head_code=self.detected_head_code)
+        self._open_matched_charfile(
+            interactive=True,
+            head_code=self.detected_head_code,
+            manual_transmit=self._is_manual_transmit_enabled(),
+        )
 
     def _init_sounds(self):
         """
