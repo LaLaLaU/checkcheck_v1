@@ -792,9 +792,32 @@ class VendorUIDriver:
         try:
             metrics = get_metrics_with_cache(charfile_path)
             left, top, right, bottom = self._get_canvas_rect()
+            # Vertical alignment: prefer the live grid rectangle so Y mapping matches
+            # actual 16-row geometry instead of fixed window offsets.
+            try:
+                frm_y = self._frame('info')
+                grid_y = self._grid(frm_y, fast=True).wrapper_object()
+                gr = grid_y.rectangle()
+                gt = int(gr.top + 2)
+                gb = int(gr.bottom - 2)
+                if (gb - gt) >= 64:
+                    top, bottom = gt, gb
+            except Exception:
+                pass
             canvas_h = max(1, bottom - top)
             cell_h = canvas_h / 16.0
-            anchor_y = int(top + (metrics.top_row + self.cfg.y_offset) * cell_h + 1)
+            # Click at target row top (dot is insertion text top-left anchor).
+            # Empirically, insert-text anchor is lower than tail glyph top in
+            # vendor app, so lift click by ~1.5 rows for top-edge alignment.
+            base_row = float(metrics.top_row + self.cfg.y_offset)
+            aligned_row = base_row - 1.5
+            target_row = max(0.0, min(15.0, aligned_row))
+            anchor_y = int(top + target_row * cell_h + 1)
+            print(
+                f"[drv][{self._ts()}] y-align: top_row={metrics.top_row} "
+                f"y_offset={self.cfg.y_offset} base_row={base_row:.2f} "
+                f"aligned_row={aligned_row:.2f} target_row={target_row:.2f}"
+            )
 
             # Horizontal click: place near the visible column of the tail content, slightly left of center.
             try:

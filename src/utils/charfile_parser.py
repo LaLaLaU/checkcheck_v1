@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from statistics import mean
 from typing import List, Optional
 
 
@@ -38,7 +37,7 @@ def _load_columns_from_file(path: str) -> List[str]:
 def _find_tail_and_toprow(cols: List[str]) -> CharMetrics:
     """根据列数据估计插入位置：
     - tail: 最后一次出现非全零的列索引（再向后空 1 列为插入点）
-    - top_row: 取靠近 tail 的若干列的“首个 1 的行号”的平均值，保证上下位置相近
+    - top_row: 取靠近 tail 的若干列中“首个 1 的最小行号”（最高行）用于更稳的上沿对齐
     """
     if not cols:
         return CharMetrics(top_row=0, scroll_percent=1.0)
@@ -54,7 +53,7 @@ def _find_tail_and_toprow(cols: List[str]) -> CharMetrics:
         # 全部为空列
         return CharMetrics(top_row=0, scroll_percent=0.0)
 
-    # 取最后若干（例如 8）列，用它们的首个 1 的行号估计垂直对齐
+    # 取最后若干（例如 8）列，用它们的首个 1 的最小行号（最高行）做垂直对齐
     window_start = max(0, last_idx - 7)
     window = cols[window_start:last_idx + 1]
 
@@ -65,21 +64,21 @@ def _find_tail_and_toprow(cols: List[str]) -> CharMetrics:
         return 8  # 空列兜底返回中线
 
     rows = [first_one_row(c) for c in window if "1" in c]
-    avg_row = int(round(mean(rows))) if rows else 8
+    top_row = min(rows) if rows else 8
 
     # 横向滚动百分比：希望让 (last_idx + 1) 靠右可见，简单按列数比值估计
     total = len(cols)
     desired = min(total, last_idx + 1)  # 在最后一列后空一列处插入
     scroll = 1.0 if total <= 1 else max(0.0, min(1.0, desired / float(total)))
 
-    return CharMetrics(top_row=max(0, min(15, avg_row)), scroll_percent=scroll)
+    return CharMetrics(top_row=max(0, min(15, top_row)), scroll_percent=scroll)
 
 
 @lru_cache(maxsize=128)
 def get_metrics_with_cache(path: Optional[str]) -> CharMetrics:
     """根据 971 文件推断插入位置与滚动比例：
     - 以最后非全零列为尾，空 1 列后插入
-    - 以尾部附近列的首个 1 的平均行号作为插入行（与原内容上下接近）
+    - 以尾部附近列的首个 1 的最小行号作为插入行（取最高行）
     """
     if not path:
         return CharMetrics()
