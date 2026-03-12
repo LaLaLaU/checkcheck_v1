@@ -61,6 +61,8 @@ class UIDriverConfig:
     precise_insert_mode: bool = True
     # Optional compensation (in columns) applied to precise target. Positive moves right.
     precise_insert_compensation_cols: int = 0
+    # Gap columns between last tail column and head-code anchor.
+    tail_gap_cols: int = 10
     # In precise mode, place target column at this visible-ratio position (0.0..1.0, from left to right).
     precise_target_screen_ratio: float = 0.2
     # Enable absolute positioning via WM_HSCROLL THUMBPOSITION (not supported by all controls).
@@ -642,7 +644,7 @@ class VendorUIDriver:
             return
 
         try:
-            plan = get_scroll_plan(charfile_path, viewport_cols=self._viewport_cols_default, right_margin=2)
+            plan = get_scroll_plan(charfile_path, viewport_cols=self._viewport_cols_default, right_margin=0)
             # Refocus and click grid so scroll messages go to the correct control.
             try:
                 grid.set_focus()
@@ -661,32 +663,14 @@ class VendorUIDriver:
                 cls = '<unknown>'
             print(f"[drv][{self._ts()}] grid hwnd={hex(hwnd)} class={cls}")
 
-            # Core parameters: desired / S / P / R.
+            # Page strategy: jump directly to the page where tail last column lives.
             W = int(self._viewport_cols_default)
-            precise_mode = True
-            target_col = None
-            try:
-                ratio = float(getattr(self.cfg, 'precise_target_screen_ratio', 0.2) or 0.2)
-            except Exception:
-                ratio = 0.2
-            ratio = max(0.05, min(0.85, ratio))
-            target_col = max(1, min(W - 2, int(round(W * ratio))))
-            # desired-screen-col = W - r -> r = W - desired-screen-col
-            r = max(0, min(W - 1, W - target_col))
-            if self.cfg.scroll_to_file_end:
-                total = int(plan.get('total', 0))
-                desired = max(0, total - 1)
-            else:
-                desired = int(plan.get('desired', 0))
-            desired = max(0, desired)
-            S = max(0, desired - W + r)
-            try:
-                percent = plan.get('percent')
-            except Exception:
-                percent = None
+            last_idx = int(plan.get('last_idx', -1))
+            page_idx = max(0, int(last_idx // W)) if (last_idx >= 0 and W > 0) else 0
+            tail_col_on_page = (last_idx % W) if (last_idx >= 0 and W > 0) else 0
             print(
-                f"[drv][{self._ts()}] grid-scroll plan: precise={precise_mode} "
-                f"desired={desired} W={W} r={r} target_col={target_col} steps={S} percent={percent}"
+                f"[drv][{self._ts()}] grid-scroll page-only: "
+                f"last_idx={last_idx} W={W} page_idx={page_idx} tail_col={tail_col_on_page}"
             )
 
             # Reset to far-left first.
@@ -706,53 +690,15 @@ class VendorUIDriver:
                     pass
             self._sleep(0.012)
 
-            # Optional absolute positioning; disabled by default.
-            if getattr(self.cfg, 'use_thumb_position', False):
-                try:
-                    import win32api  # type: ignore
-                    pos16 = max(0, min(65535, int(float(plan.get('percent', 0.0)) * 65535)))
-                    wparam = win32api.MAKELONG(win32con.SB_THUMBPOSITION, pos16)
-                    win32gui.SendMessage(hwnd, win32con.WM_HSCROLL, wparam, 0)
-                    win32gui.SendMessage(hwnd, win32con.WM_HSCROLL, win32con.SB_ENDSCROLL, 0)
-                    print(f"[drv] hscroll: THUMBPOSITION pos16={pos16}")
-                except Exception:
-                    print("[drv] hscroll: THUMBPOSITION not supported; skipping")
-
-            if self.cfg.fast_page and desired >= W:
-                # Split S into page and residual line scroll steps.
-                P = max(0, S // W)
-                R = max(0, S - P * W)
-                try:
-                    for i in range(P):
-                        win32gui.SendMessage(hwnd, win32con.WM_HSCROLL, win32con.SB_PAGERIGHT, 0)
-                        self._sleep(0.01)
-                    win32gui.SendMessage(hwnd, win32con.WM_HSCROLL, win32con.SB_ENDSCROLL, 0)
+            # Page-right exactly to tail page; no residual line scroll.
+            try:
+                for i in range(page_idx):
+                    win32gui.SendMessage(hwnd, win32con.WM_HSCROLL, win32con.SB_PAGERIGHT, 0)
                     self._sleep(0.01)
-                except Exception:
-                    pass
-                # Residual R: continue RIGHT x R.
-                try:
-                    for i in range(R):
-                        win32gui.SendMessage(hwnd, win32con.WM_HSCROLL, win32con.SB_LINERIGHT, 0)
-                        if (i % 10) == 0:
-                            self._sleep(0.003)
-                    win32gui.SendMessage(hwnd, win32con.WM_HSCROLL, win32con.SB_ENDSCROLL, 0)
-                except Exception:
-                    pass
-                print(f"[drv] fast-page: P={P} pages, R={R} rights, S={S}, W={self._viewport_cols_default}")
-            else:
-                # Fallback to line-by-line RIGHT scroll.
-                steps = S
-                if steps > 0:
-                    try:
-                        for i in range(steps):
-                            win32gui.SendMessage(hwnd, win32con.WM_HSCROLL, win32con.SB_LINERIGHT, 0)
-                            if (i % 10) == 0:
-                                self._sleep(0.003)
-                        win32gui.SendMessage(hwnd, win32con.WM_HSCROLL, win32con.SB_ENDSCROLL, 0)
-                    except Exception:
-                        pass
-                print(f"[drv] grid-scroll KEY plan: steps={steps} plan={plan}")
+                win32gui.SendMessage(hwnd, win32con.WM_HSCROLL, win32con.SB_ENDSCROLL, 0)
+            except Exception:
+                pass
+            print(f"[drv] page-only scroll: pages={page_idx}, W={W}")
         except Exception as e:
             print(f"[drv] grid-scroll KEY plan error: {e}")
 
@@ -770,7 +716,7 @@ class VendorUIDriver:
             frm = self._frame('info')
             # Use non-fast handle resolution for scrolling to ensure viewport target is correct.
             grid = self._grid(frm).wrapper_object()
-            plan = get_scroll_plan(charfile_path, viewport_cols=self._viewport_cols_default, right_margin=2)
+            plan = get_scroll_plan(charfile_path, viewport_cols=self._viewport_cols_default, right_margin=0)
             percent = float(plan.get('percent', 1.0) or 1.0)
             self._scroll_grid_to_percent(grid, percent, charfile_path=charfile_path)
         except Exception:
@@ -783,7 +729,7 @@ class VendorUIDriver:
             frm = self._frame('info')
             # Use non-fast handle resolution for scrolling to ensure viewport target is correct.
             grid = self._grid(frm).wrapper_object()
-            plan = get_scroll_plan(charfile_path, viewport_cols=self._viewport_cols_default, right_margin=2)
+            plan = get_scroll_plan(charfile_path, viewport_cols=self._viewport_cols_default, right_margin=0)
             percent = float(plan.get('percent', 1.0) or 1.0)
             self._scroll_grid_to_percent(grid, percent, charfile_path=charfile_path)
         except Exception:
@@ -819,36 +765,23 @@ class VendorUIDriver:
                 f"aligned_row={aligned_row:.2f} target_row={target_row:.2f}"
             )
 
-            # Horizontal click: place near the visible column of the tail content, slightly left of center.
+            # Horizontal click: on tail page, place anchor at (tail_col + fixed gap).
             try:
                 W = int(self._viewport_cols_default)
-                precise_mode = True
-                try:
-                    ratio = float(getattr(self.cfg, 'precise_target_screen_ratio', 0.2) or 0.2)
-                except Exception:
-                    ratio = 0.2
-                ratio = max(0.05, min(0.85, ratio))
-                target_col = max(1, min(W - 2, int(round(W * ratio))))
-                r = max(0, min(W - 1, W - target_col))
-
-                # Use same scroll-plan parameters to locate the tail content column.
-                plan = get_scroll_plan(charfile_path, viewport_cols=W, right_margin=r)
+                plan = get_scroll_plan(charfile_path, viewport_cols=W, right_margin=0)
                 last_idx = max(0, int(plan.get('last_idx', 0)))
-                desired = max(0, int(plan.get('desired', last_idx + 1)))
-                S = max(0, desired - W + r)
-                S_eff = S
-
-                target_idx = desired
+                tail_col = last_idx % W
+                gap_cols = int(getattr(self.cfg, 'tail_gap_cols', 10) or 10)
                 comp = int(getattr(self.cfg, 'precise_insert_compensation_cols', 0) or 0)
-                target_idx = max(0, target_idx + comp)
-                screen_col = max(0, min(W - 1, target_idx - S_eff))
+                screen_col_unclamped = tail_col + gap_cols + comp
+                screen_col = max(0, min(W - 1, screen_col_unclamped))
 
                 inner = 0.5
 
                 print(
-                    f"[drv][{self._ts()}] tail-target: precise={precise_mode} "
-                    f"last_idx={last_idx} desired={desired} target_idx={target_idx} "
-                    f"target_col={target_col} S_eff={S_eff} screen_col={screen_col}"
+                    f"[drv][{self._ts()}] tail-target: "
+                    f"last_idx={last_idx} tail_col={tail_col} gap={gap_cols} comp={comp} "
+                    f"screen_col={screen_col} unclamped={screen_col_unclamped}"
                 )
                 col_w = max(1.0, (right - left) / float(W))
                 gx_calc = int(left + (screen_col + inner) * col_w)
