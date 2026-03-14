@@ -172,7 +172,18 @@ class VendorPushWorker(QObject):
 
         if main_only_no_head:
             if manual_transmit:
-                self.finished.emit("success", "状态: 未识别到架次号，已按“只喷图号”执行；请手动点击“传输信息”")
+                try:
+                    drv.hover_transmit()
+                except Exception as e:
+                    self.finished.emit("warning", f"状态: 未识别到架次号，已按“只喷图号”执行；但传输按钮定位失败: {e}")
+                    return
+                try:
+                    if drv.wait_monitor_updated(90.0):
+                        self.finished.emit("success", "状态: 未识别到架次号，已按“只喷图号”执行并完成手动传输信息")
+                    else:
+                        self.finished.emit("success", "状态: 未识别到架次号，已按“只喷图号”执行；鼠标已停在“传输信息”，请手动点击两次（间隔3秒）")
+                except Exception:
+                    self.finished.emit("success", "状态: 未识别到架次号，已按“只喷图号”执行；鼠标已停在“传输信息”，请手动点击两次（间隔3秒）")
                 return
             try:
                 drv.transmit()
@@ -194,7 +205,18 @@ class VendorPushWorker(QObject):
                 self.finished.emit("warning", f"状态: 架次号已写入，但插入文字失败: {e}")
                 return
             if manual_transmit:
-                self.finished.emit("success", f"状态: 已写入并插入架次号 {norm_head}；请手动点击“传输信息”")
+                try:
+                    drv.hover_transmit()
+                except Exception as e:
+                    self.finished.emit("warning", f"状态: 已写入并插入架次号 {norm_head}；但传输按钮定位失败: {e}")
+                    return
+                try:
+                    if drv.wait_monitor_updated(90.0):
+                        self.finished.emit("success", f"状态: 已写入并插入架次号 {norm_head}，已完成手动传输信息")
+                    else:
+                        self.finished.emit("success", f"状态: 已写入并插入架次号 {norm_head}；鼠标已停在“传输信息”，请手动点击两次（间隔3秒）")
+                except Exception:
+                    self.finished.emit("success", f"状态: 已写入并插入架次号 {norm_head}；鼠标已停在“传输信息”，请手动点击两次（间隔3秒）")
                 return
             try:
                 drv.transmit()
@@ -2512,7 +2534,12 @@ class MainWindow(QMainWindow):
             norm_head = self._normalize_head_code(head_code) if head_code else ""
             if main_only_no_head:
                 if manual_transmit:
-                    self._set_status("状态: 未识别到架次号，已按“只喷图号”执行；请手动点击“传输信息”", self.status_success_bg)
+                    try:
+                        drv.hover_transmit()
+                    except Exception as e:
+                        self._set_status(f"状态: 未识别到架次号，已按“只喷图号”执行；但传输按钮定位失败: {e}", self.status_warning_bg)
+                        return False
+                    self._set_status("状态: 未识别到架次号，已按“只喷图号”执行；鼠标已停在“传输信息”，请手动点击两次（间隔3秒）", self.status_success_bg)
                     return True
                 try:
                     drv.transmit()
@@ -2540,7 +2567,12 @@ class MainWindow(QMainWindow):
                     self._set_status("状态: 架次号已写入，但插入文字失败", self.status_warning_bg)
                     return False
                 if manual_transmit:
-                    self._set_status(f"状态: 已写入并插入架次号 {norm_head}；请手动点击“传输信息”", self.status_success_bg)
+                    try:
+                        drv.hover_transmit()
+                    except Exception as e:
+                        self._set_status(f"状态: 已写入并插入架次号 {norm_head}；但传输按钮定位失败: {e}", self.status_warning_bg)
+                        return False
+                    self._set_status(f"状态: 已写入并插入架次号 {norm_head}；鼠标已停在“传输信息”，请手动点击两次（间隔3秒）", self.status_success_bg)
                     return True
                 try:
                     drv.transmit()

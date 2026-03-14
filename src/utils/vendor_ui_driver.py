@@ -892,6 +892,71 @@ class VendorUIDriver:
             print(f"[drv] transmit error: {e}")
         self._sleep(0.10)
 
+    def _resolve_transmit_button(self):
+        tx_titles = ['传输信息', '发送信息', '浼犺緭淇℃伅']
+        # Prefer cached hwnd.
+        if win32gui and getattr(self, '_tx_btn_cached', None):
+            try:
+                if (win32gui.IsWindow(self._tx_btn_cached) and
+                    win32gui.GetClassName(self._tx_btn_cached) == 'ThunderRT6CommandButton'):
+                    return self.app.window(handle=self._tx_btn_cached)
+            except Exception:
+                self._tx_btn_cached = None
+
+        btn = None
+        for cap in tx_titles:
+            try:
+                btn = self._btn(self.win, cap)
+                break
+            except Exception:
+                continue
+
+        if btn is None:
+            try:
+                cands = self.win.wrapper_object().descendants(class_name='ThunderRT6CommandButton')
+            except Exception:
+                cands = []
+            norms = {self._norm_ui_text(t) for t in tx_titles}
+            for b in cands:
+                try:
+                    txt = ''
+                    try:
+                        txt = b.window_text()
+                    except Exception:
+                        pass
+                    n = self._norm_ui_text(str(txt))
+                    if n in norms or any(x in n for x in norms):
+                        btn = b
+                        break
+                except Exception:
+                    continue
+
+        if btn is not None:
+            try:
+                h = int(getattr(btn, 'handle', getattr(btn, 'element_info').handle))
+                self._tx_btn_cached = h
+            except Exception:
+                pass
+        return btn
+
+    def hover_transmit(self) -> None:
+        print(f"[drv][{self._ts()}] hover_transmit: begin")
+        try:
+            self.win.set_focus()
+        except Exception:
+            pass
+
+        btn = self._resolve_transmit_button()
+        if btn is None:
+            raise RuntimeError("transmit button not found")
+
+        rect = btn.rectangle()
+        x = int((rect.left + rect.right) / 2)
+        y = int((rect.top + rect.bottom) / 2)
+        mouse.move(coords=(x, y))
+        print(f"[drv][{self._ts()}] hover_transmit: moved to ({x},{y})")
+        self._sleep(0.06)
+
     def _capture_monitor_text(self) -> Tuple[Optional[object], str]:
         def _resolve_parent() -> Optional[object]:
             parent_key = str(getattr(self.cfg, 'monitor_parent', 'info') or 'info')
