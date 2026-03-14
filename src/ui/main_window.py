@@ -2156,10 +2156,50 @@ class MainWindow(QMainWindow):
     def _on_vendor_push_finished(self, level: str, message: str):
         if level == "success":
             self._set_status(message, self.status_success_bg)
+            if ("传输" in (message or "")) and ("请手动" not in (message or "")) and ("失败" not in (message or "")):
+                self._notify_transmit_success()
         elif level == "warning":
             self._set_status(message, self.status_warning_bg)
         else:
             self._set_status(message, self.status_error_bg)
+
+    def _notify_transmit_success(self):
+        """传输成功提醒：播报“末三位+已传输”。"""
+        def _resolve_tail3_text() -> str:
+            try:
+                candidates = []
+                if getattr(self, "manual_confirmed_main_code", None):
+                    candidates.append(str(self.manual_confirmed_main_code))
+                if getattr(self, "detected_main_code", None):
+                    candidates.append(str(self.detected_main_code))
+                if getattr(self, "matched_char_file", None):
+                    from pathlib import Path
+                    candidates.append(Path(str(self.matched_char_file)).name)
+                for s in candidates:
+                    m = re.search(r"(\d{3})(?!.*\d)", s or "")
+                    if m:
+                        return m.group(1)
+            except Exception:
+                pass
+            return ""
+
+        try:
+            import win32com.client  # type: ignore
+            speaker = getattr(self, "_sapi_speaker", None)
+            if speaker is None:
+                speaker = win32com.client.Dispatch("SAPI.SpVoice")
+                speaker.Rate = 0
+                speaker.Volume = 100
+                self._sapi_speaker = speaker
+            tail3 = _resolve_tail3_text()
+            # Read digits as individual characters (e.g. 993 -> "9 9 3"),
+            # so TTS won't interpret it as a cardinal number.
+            tts_tail = " ".join(list(tail3)) if tail3 else ""
+            text = f"{tts_tail}已传输" if tts_tail else "已传输"
+            # 同步播报，避免异步对象释放导致无声。
+            speaker.Speak(text, 0)
+        except Exception as e:
+            logger.warning(f"SAPI 语音播报失败: {e}")
 
     def _candidate_code_for_display(self, full_path: str, target_norm: str) -> str:
         """从候选文件路径推断用于展示/比对的图号文本。"""
@@ -2482,6 +2522,7 @@ class MainWindow(QMainWindow):
                     self._set_status("状态: 仅喷图号模式传输失败", self.status_warning_bg)
                     return False
                 self._set_status("状态: 未识别到架次号，已按“只喷图号”执行并传输", self.status_success_bg)
+                self._notify_transmit_success()
                 return True
             if norm_head:
                 try:
@@ -2509,6 +2550,7 @@ class MainWindow(QMainWindow):
                     self._set_status("状态: 架次号已插入，但传输信息失败", self.status_warning_bg)
                     return False
                 self._set_status(f"状态: 已写入并插入架次号 {norm_head}，已执行传输信息", self.status_success_bg)
+                self._notify_transmit_success()
             else:
                 self._set_status("状态: 已在喷码软件中打开字符文件", self.status_success_bg)
             return True
