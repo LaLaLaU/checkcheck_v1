@@ -175,22 +175,22 @@ class VendorPushWorker(QObject):
                 try:
                     drv.hover_transmit()
                 except Exception as e:
-                    self.finished.emit("warning", f"状态: 未识别到架次号，已按“只喷图号”执行；但传输按钮定位失败: {e}")
+                    self.finished.emit("warning", f"状态: 已按“仅喷图号模式”执行；但传输按钮定位失败: {e}")
                     return
                 try:
                     if drv.wait_monitor_updated(90.0):
-                        self.finished.emit("success", "状态: 未识别到架次号，已按“只喷图号”执行并完成手动传输信息")
+                        self.finished.emit("success", "状态: 已按“仅喷图号模式”执行并完成手动传输信息")
                     else:
-                        self.finished.emit("success", "状态: 未识别到架次号，已按“只喷图号”执行；鼠标已停在“传输信息”，请手动点击两次（间隔3秒）")
+                        self.finished.emit("success", "状态: 已按“仅喷图号模式”执行；鼠标已停在“传输信息”，请手动点击两次（间隔3秒）")
                 except Exception:
-                    self.finished.emit("success", "状态: 未识别到架次号，已按“只喷图号”执行；鼠标已停在“传输信息”，请手动点击两次（间隔3秒）")
+                    self.finished.emit("success", "状态: 已按“仅喷图号模式”执行；鼠标已停在“传输信息”，请手动点击两次（间隔3秒）")
                 return
             try:
                 drv.transmit()
             except Exception as e:
-                self.finished.emit("warning", f"状态: 仅喷图号模式传输失败: {e}")
+                self.finished.emit("warning", f"状态: 仅喷图号传输失败: {e}")
                 return
-            self.finished.emit("success", "状态: 未识别到架次号，已按“只喷图号”执行并传输")
+            self.finished.emit("success", "状态: 已按“仅喷图号模式”执行并传输")
             return
 
         if norm_head:
@@ -411,6 +411,17 @@ class MainWindow(QMainWindow):
         manual_tx_layout.addWidget(self.manual_transmit_checkbox)
         manual_tx_layout.addStretch(1)
         results_layout.addRow(manual_tx_widget)
+
+        main_only_widget = QWidget()
+        main_only_layout = QHBoxLayout(main_only_widget)
+        main_only_layout.setContentsMargins(0, 0, 0, 0)
+        main_only_layout.setSpacing(8)
+        self.main_only_mode_checkbox = QCheckBox("仅喷涂图号模式")
+        self.main_only_mode_checkbox.setToolTip("勾选后无论是否识别到架次号，都不录入架次号，只喷图号")
+        self.main_only_mode_checkbox.setChecked(False)
+        main_only_layout.addWidget(self.main_only_mode_checkbox)
+        main_only_layout.addStretch(1)
+        results_layout.addRow(main_only_widget)
 
         # 再放“图号”行（下方）
         self.label_text_result = QLabel("图号: 等待识别...")
@@ -2134,6 +2145,13 @@ class MainWindow(QMainWindow):
         except Exception:
             return False
 
+    def _is_main_only_mode_enabled(self) -> bool:
+        try:
+            cb = getattr(self, "main_only_mode_checkbox", None)
+            return bool(cb and cb.isChecked())
+        except Exception:
+            return False
+
     def _enqueue_vendor_push(self, head_code: str = None, *, main_only_no_head: bool = False):
         """把自动唤起/填入任务放入后台队列，不阻塞当前识别 UI。"""
         if not self.matched_char_file:
@@ -2142,6 +2160,10 @@ class MainWindow(QMainWindow):
         norm_head = self._normalize_head_code(head_code) if head_code else ""
         exe_path, title_re = self._resolve_vendor_launch_config()
         manual_transmit = self._is_manual_transmit_enabled()
+        main_only_mode = self._is_main_only_mode_enabled()
+        main_only_effective = bool(main_only_no_head or main_only_mode)
+        if main_only_effective:
+            norm_head = ""
 
         thread = getattr(self, "vendor_push_thread", None)
         worker = getattr(self, "vendor_push_worker", None)
@@ -2150,16 +2172,16 @@ class MainWindow(QMainWindow):
             self._open_matched_charfile(
                 interactive=False,
                 head_code=norm_head,
-                main_only_no_head=main_only_no_head,
+                main_only_no_head=main_only_effective,
                 manual_transmit=manual_transmit,
             )
             return
 
-        if main_only_no_head:
+        if main_only_effective:
             if manual_transmit:
-                self._set_status("状态: 未识别到架次号，后台按“只喷图号”执行中；请手动传输...", self.status_warning_bg)
+                self._set_status("状态: 已按“仅喷图号模式”执行中；请手动传输...", self.status_warning_bg)
             else:
-                self._set_status("状态: 未识别到架次号，后台按“只喷图号”执行中...", self.status_warning_bg)
+                self._set_status("状态: 已按“仅喷图号模式”执行中...", self.status_warning_bg)
         else:
             if manual_transmit:
                 self._set_status("状态: 已匹配字符文件，后台正在唤起并写入；请手动传输...", self.status_warning_bg)
@@ -2170,7 +2192,7 @@ class MainWindow(QMainWindow):
             norm_head,
             exe_path,
             title_re,
-            bool(main_only_no_head),
+            bool(main_only_effective),
             bool(manual_transmit),
         )
 
@@ -2532,14 +2554,15 @@ class MainWindow(QMainWindow):
                 raise
             drv.open_char_file(self.matched_char_file)
             norm_head = self._normalize_head_code(head_code) if head_code else ""
-            if main_only_no_head:
+            main_only_effective = bool(main_only_no_head or self._is_main_only_mode_enabled())
+            if main_only_effective:
                 if manual_transmit:
                     try:
                         drv.hover_transmit()
                     except Exception as e:
-                        self._set_status(f"状态: 未识别到架次号，已按“只喷图号”执行；但传输按钮定位失败: {e}", self.status_warning_bg)
+                        self._set_status(f"状态: 已按“仅喷图号模式”执行；但传输按钮定位失败: {e}", self.status_warning_bg)
                         return False
-                    self._set_status("状态: 未识别到架次号，已按“只喷图号”执行；鼠标已停在“传输信息”，请手动点击两次（间隔3秒）", self.status_success_bg)
+                    self._set_status("状态: 已按“仅喷图号模式”执行；鼠标已停在“传输信息”，请手动点击两次（间隔3秒）", self.status_success_bg)
                     return True
                 try:
                     drv.transmit()
@@ -2548,7 +2571,7 @@ class MainWindow(QMainWindow):
                         QMessageBox.warning(self, "传输失败", f"仅喷图号模式传输失败：{e}")
                     self._set_status("状态: 仅喷图号模式传输失败", self.status_warning_bg)
                     return False
-                self._set_status("状态: 未识别到架次号，已按“只喷图号”执行并传输", self.status_success_bg)
+                self._set_status("状态: 已按“仅喷图号模式”执行并传输", self.status_success_bg)
                 self._notify_transmit_success()
                 return True
             if norm_head:
@@ -2671,6 +2694,14 @@ class MainWindow(QMainWindow):
         if not main_code:
             return
         norm_head = self._normalize_head_code(head_code) if head_code else ""
+        if self._is_main_only_mode_enabled():
+            if not self._confirm_candidate_for_main_code(main_code, force=False):
+                if not self.matched_char_file:
+                    self.charfile_label.setText("字符文件: <候选未确认>")
+                    self.open_charfile_button.setEnabled(False)
+                return
+            self._enqueue_vendor_push(head_code="", main_only_no_head=True)
+            return
         if not norm_head:
             action = self._prompt_no_head_action()
             if action == "main_only":
@@ -2718,6 +2749,16 @@ class MainWindow(QMainWindow):
         """通过自动化驱动喷码软件打开匹配到的字符文件。"""
         main_code = self.detected_main_code or ""
         norm_head = self._normalize_head_code(self.detected_head_code) if self.detected_head_code else ""
+        if self._is_main_only_mode_enabled():
+            if not self._confirm_candidate_for_main_code(main_code, force=False):
+                return
+            self._open_matched_charfile(
+                interactive=True,
+                head_code="",
+                main_only_no_head=True,
+                manual_transmit=self._is_manual_transmit_enabled(),
+            )
+            return
         if not norm_head:
             action = self._prompt_no_head_action()
             if action == "main_only":
