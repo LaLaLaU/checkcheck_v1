@@ -171,6 +171,10 @@ class VendorPushWorker(QObject):
             return
 
         if main_only_no_head:
+            try:
+                drv.prepare_scroll_for_tail(char_file)
+            except Exception:
+                pass
             if manual_transmit:
                 try:
                     drv.hover_transmit()
@@ -2556,6 +2560,10 @@ class MainWindow(QMainWindow):
             norm_head = self._normalize_head_code(head_code) if head_code else ""
             main_only_effective = bool(main_only_no_head or self._is_main_only_mode_enabled())
             if main_only_effective:
+                try:
+                    drv.prepare_scroll_for_tail(self.matched_char_file)
+                except Exception:
+                    pass
                 if manual_transmit:
                     try:
                         drv.hover_transmit()
