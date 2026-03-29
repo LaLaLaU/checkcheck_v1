@@ -12,6 +12,7 @@ Output format:
 from __future__ import annotations
 
 import argparse
+import functools
 import gzip
 import os
 from dataclasses import dataclass
@@ -481,6 +482,13 @@ def _load_bitmap_glyphs(path_str: Optional[str]) -> Dict[str, List[str]]:
     p = Path(path_str)
     if not p.exists():
         raise FileNotFoundError(f"Bitmap font file not found: {p}")
+    stat = p.stat()
+    return _load_bitmap_glyphs_cached(str(p.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+
+
+@functools.lru_cache(maxsize=8)
+def _load_bitmap_glyphs_cached(path_str: str, _mtime_ns: int, _size: int) -> Dict[str, List[str]]:
+    p = Path(path_str)
     name = p.name.lower()
     ext = p.suffix.lower()
     if name.endswith(".pcf.gz") or ext == ".pcf":
@@ -492,6 +500,11 @@ def _load_bitmap_glyphs(path_str: Optional[str]) -> Dict[str, List[str]]:
     if not glyphs:
         raise RuntimeError(f"No usable glyphs found in bitmap font: {p}")
     return glyphs
+
+
+def preload_wqy_bitmap_fonts() -> None:
+    _load_bitmap_glyphs(str(_default_wqy_bitmap_font_path(False)))
+    _load_bitmap_glyphs(str(_default_wqy_bitmap_font_path(True)))
 
 
 def _resize_cols_height(cols: Sequence[str], target_h: int) -> List[str]:

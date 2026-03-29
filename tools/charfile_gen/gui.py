@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from pathlib import Path
 
 from PyQt5.QtCore import Qt
@@ -27,7 +28,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from gen_charfile import DEFAULT_LINE1, DEFAULT_LINE2, generate_charfile
+from gen_charfile import DEFAULT_LINE1, DEFAULT_LINE2, generate_charfile, preload_wqy_bitmap_fonts
 
 
 def _default_out_dir() -> str:
@@ -53,6 +54,7 @@ class CharfileGenWindow(QMainWindow):
         self.setWindowTitle("字符文件生成器")
         self.resize(1280, 860)
         self._setup_ui()
+        self._start_font_warmup()
 
     def _setup_ui(self) -> None:
         central = QWidget(self)
@@ -168,6 +170,17 @@ class CharfileGenWindow(QMainWindow):
         self.preview_scroll.setWidget(self.preview_label)
         preview_layout.addWidget(self.preview_scroll)
         root.addWidget(preview_group, 1)
+
+    def _start_font_warmup(self) -> None:
+        def _warmup() -> None:
+            try:
+                preload_wqy_bitmap_fonts()
+            except Exception:
+                # Warmup is best-effort. Generation will still load lazily if needed.
+                pass
+
+        self._warmup_thread = threading.Thread(target=_warmup, name="charfile-font-warmup", daemon=True)
+        self._warmup_thread.start()
 
     def _pick_out_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择输出目录", self.out_dir_edit.text().strip() or ".")
