@@ -46,6 +46,7 @@ env\python.exe tools\charfile_gen\gen_charfile.py `
 可选参数：
 
 - `--bold`
+- `--code-only-filename`
 - `--save-preview`
 - `--preview D:\tmp\preview.png`
 - `--output D:\tmp\J11B.6130.B.505.919`

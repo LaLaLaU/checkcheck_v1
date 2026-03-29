@@ -69,12 +69,12 @@ class CharfileGenWindow(QMainWindow):
         form.setLabelAlignment(Qt.AlignRight)
         form.setSpacing(8)
 
-        self.cn_edit = QLineEdit("燃油")
-        self.cn_edit.setPlaceholderText("汉字前缀（可空）")
+        self.cn_edit = QLineEdit("")
+        self.cn_edit.setPlaceholderText("建议：燃油")
         form.addRow("汉字前缀:", self.cn_edit)
 
-        self.code_edit = QLineEdit("J11B.6130.B.505.919")
-        self.code_edit.setPlaceholderText("图号（将作为输出文件名）")
+        self.code_edit = QLineEdit("")
+        self.code_edit.setPlaceholderText("建议：J11B.6130.B.505.919")
         form.addRow("图号:", self.code_edit)
 
         self.out_dir_edit = QLineEdit(_default_out_dir())
@@ -94,6 +94,10 @@ class CharfileGenWindow(QMainWindow):
         self.center_punctuation_checkbox = QCheckBox("标点居中")
         self.center_punctuation_checkbox.setChecked(False)
         form.addRow("标点样式:", self.center_punctuation_checkbox)
+
+        self.filename_with_cn_checkbox = QCheckBox("仅图号作为输出文件名")
+        self.filename_with_cn_checkbox.setChecked(False)
+        form.addRow("输出命名:", self.filename_with_cn_checkbox)
 
         self.line1_edit = QLineEdit(DEFAULT_LINE1)
         self.line2_edit = QLineEdit(DEFAULT_LINE2)
@@ -254,6 +258,7 @@ class CharfileGenWindow(QMainWindow):
                 output=None,
                 bold=bool(self.bold_checkbox.isChecked()),
                 center_punctuation=bool(self.center_punctuation_checkbox.isChecked()),
+                filename_with_cn=not bool(self.filename_with_cn_checkbox.isChecked()),
                 line1=self.line1_edit.text().strip() or DEFAULT_LINE1,
                 line2=self.line2_edit.text().strip() or DEFAULT_LINE2,
                 gap_cn_code=int(self.gap_cn_code_spin.value()),

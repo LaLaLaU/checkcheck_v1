@@ -15,6 +15,7 @@ import argparse
 import functools
 import gzip
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -29,6 +30,8 @@ DEFAULT_LINE2 = "XXXXXX/XXXXXX/XXXXXX/XXXXXX"
 WQY_BITMAP_DIR = Path(__file__).resolve().parent / "wqy-bitmapfont"
 WQY_BITMAP_REGULAR = WQY_BITMAP_DIR / "wenquanyi_12pt.pcf"
 WQY_BITMAP_BOLD = WQY_BITMAP_DIR / "wenquanyi_12ptb.pcf"
+_BITMAP_LOAD_LOCK = threading.Lock()
+_BITMAP_LOAD_EVENTS: Dict[str, threading.Event] = {}
 
 PCF_PROPERTIES = 1 << 0
 PCF_METRICS = 1 << 2
@@ -483,6 +486,26 @@ def _load_bitmap_glyphs(path_str: Optional[str]) -> Dict[str, List[str]]:
     if not p.exists():
         raise FileNotFoundError(f"Bitmap font file not found: {p}")
     stat = p.stat()
+    cache_key = f"{str(p.resolve())}|{int(stat.st_mtime_ns)}|{int(stat.st_size)}"
+
+    with _BITMAP_LOAD_LOCK:
+        event = _BITMAP_LOAD_EVENTS.get(cache_key)
+        if event is None:
+            event = threading.Event()
+            _BITMAP_LOAD_EVENTS[cache_key] = event
+            leader = True
+        else:
+            leader = False
+
+    if leader:
+        try:
+            return _load_bitmap_glyphs_cached(str(p.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+        finally:
+            event.set()
+            with _BITMAP_LOAD_LOCK:
+                _BITMAP_LOAD_EVENTS.pop(cache_key, None)
+
+    event.wait()
     return _load_bitmap_glyphs_cached(str(p.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
 
 
@@ -798,6 +821,18 @@ def _normalize_code_for_filename(code: str) -> str:
     return s
 
 
+def _build_output_filename(cn: str, code: str, with_cn: bool) -> str:
+    code_norm = _normalize_code_for_filename(code)
+    if not with_cn:
+        return code_norm
+    cn_text = (cn or "").strip().replace(" ", "")
+    if not cn_text:
+        return code_norm
+    if any(c in cn_text for c in '<>:"/\\|?*'):
+        raise ValueError(f"Chinese prefix contains invalid filename chars: {cn_text}")
+    return f"{cn_text}{code_norm}"
+
+
 def _save_charfile(path: Path, line1: str, line2: str, cols: Sequence[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines: List[str] = [line1, line2]
@@ -829,6 +864,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--output", default=None, help="Optional full output file path. Overrides --out-dir.")
     ap.add_argument("--bold", action="store_true", help="Use wenquanyi_12ptb.pcf instead of wenquanyi_12pt.pcf.")
     ap.add_argument("--center-punctuation", action="store_true", help="Keep punctuation vertically centered instead of baseline-aligned.")
+    ap.add_argument("--code-only-filename", action="store_true", help="Use code only as output filename.")
     ap.add_argument("--line1", default=DEFAULT_LINE1, help="Header line 1.")
     ap.add_argument("--line2", default=DEFAULT_LINE2, help="Header line 2.")
     ap.add_argument("--gap-cn-code", type=int, default=9, help="Gap between Chinese and code.")
@@ -848,6 +884,7 @@ def generate_charfile(
     output: Optional[str] = None,
     bold: bool = False,
     center_punctuation: bool = False,
+    filename_with_cn: bool = True,
     line1: str = DEFAULT_LINE1,
     line2: str = DEFAULT_LINE2,
     gap_cn_code: int = 9,
@@ -858,6 +895,7 @@ def generate_charfile(
     preview: Optional[str] = None,
 ) -> GenerateResult:
     code_norm = _normalize_code_for_filename(code)
+    out_name = _build_output_filename(cn, code, bool(filename_with_cn))
     cn_text = (cn or "").strip()
 
     bitmap_glyphs = _load_bitmap_glyphs(str(_default_wqy_bitmap_font_path(bool(bold))))
@@ -877,7 +915,7 @@ def generate_charfile(
     if output:
         out_path = Path(output)
     else:
-        out_path = Path(out_dir) / code_norm
+        out_path = Path(out_dir) / out_name
 
     _save_charfile(out_path, line1, line2, cols)
 
@@ -906,6 +944,7 @@ def main() -> int:
         output=args.output,
         bold=bool(args.bold),
         center_punctuation=bool(args.center_punctuation),
+        filename_with_cn=not bool(args.code_only_filename),
         line1=args.line1,
         line2=args.line2,
         gap_cn_code=args.gap_cn_code,
