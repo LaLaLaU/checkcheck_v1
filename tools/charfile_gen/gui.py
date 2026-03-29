@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 from __future__ import annotations
@@ -8,9 +8,10 @@ import sys
 from pathlib import Path
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QPixmap
+from PyQt5.QtGui import QFont, QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -84,31 +85,18 @@ class CharfileGenWindow(QMainWindow):
         out_box.setLayout(out_row)
         form.addRow("输出目录:", out_box)
 
-        self.font_edit = QLineEdit("")
-        self.font_edit.setPlaceholderText("可选：字体路径（如 C:\\Windows\\Fonts\\msyh.ttc）")
-        font_row = QHBoxLayout()
-        font_row.addWidget(self.font_edit, 1)
-        btn_browse_font = QPushButton("选择字体")
-        btn_browse_font.clicked.connect(self._pick_font)
-        font_row.addWidget(btn_browse_font)
-        font_box = QWidget()
-        font_box.setLayout(font_row)
-        form.addRow("字体文件:", font_box)
+        self.bold_checkbox = QCheckBox("使用加粗字库（wenquanyi_12ptb.pcf）")
+        self.bold_checkbox.setChecked(False)
+        form.addRow("字库样式:", self.bold_checkbox)
+
+        self.center_punctuation_checkbox = QCheckBox("标点居中")
+        self.center_punctuation_checkbox.setChecked(False)
+        form.addRow("标点样式:", self.center_punctuation_checkbox)
 
         self.line1_edit = QLineEdit(DEFAULT_LINE1)
         self.line2_edit = QLineEdit(DEFAULT_LINE2)
         form.addRow("头1:", self.line1_edit)
         form.addRow("头2:", self.line2_edit)
-
-        self.font_size_spin = QSpinBox()
-        self.font_size_spin.setRange(8, 300)
-        self.font_size_spin.setValue(64)
-        form.addRow("字体大小:", self.font_size_spin)
-
-        self.threshold_spin = QSpinBox()
-        self.threshold_spin.setRange(0, 255)
-        self.threshold_spin.setValue(180)
-        form.addRow("二值阈值:", self.threshold_spin)
 
         gap_row = QHBoxLayout()
         self.gap_cn_code_spin = QSpinBox()
@@ -119,25 +107,31 @@ class CharfileGenWindow(QMainWindow):
         self.gap_code_spin.setValue(2)
         self.gap_dot_spin = QSpinBox()
         self.gap_dot_spin.setRange(0, 100)
-        self.gap_dot_spin.setValue(3)
+        self.gap_dot_spin.setValue(2)
         self.gap_cn_inner_spin = QSpinBox()
         self.gap_cn_inner_spin.setRange(0, 100)
-        self.gap_cn_inner_spin.setValue(0)
+        self.gap_cn_inner_spin.setValue(1)
+
         gap_row.addWidget(QLabel("汉字-图号"))
         gap_row.addWidget(self.gap_cn_code_spin)
         gap_row.addSpacing(8)
         gap_row.addWidget(QLabel("图号普通"))
         gap_row.addWidget(self.gap_code_spin)
         gap_row.addSpacing(8)
-        gap_row.addWidget(QLabel("点边界"))
+        gap_row.addWidget(QLabel("点号边界"))
         gap_row.addWidget(self.gap_dot_spin)
         gap_row.addSpacing(8)
         gap_row.addWidget(QLabel("汉字内部"))
         gap_row.addWidget(self.gap_cn_inner_spin)
         gap_row.addStretch(1)
+
         gap_box = QWidget()
         gap_box.setLayout(gap_row)
         form.addRow("间距(列):", gap_box)
+
+        self.preview_checkbox = QCheckBox("生成预览图文件")
+        self.preview_checkbox.setChecked(False)
+        form.addRow("预览输出:", self.preview_checkbox)
 
         root.addWidget(form_group)
 
@@ -167,7 +161,7 @@ class CharfileGenWindow(QMainWindow):
         preview_layout = QVBoxLayout(preview_group)
         self.preview_scroll = QScrollArea()
         self.preview_scroll.setWidgetResizable(True)
-        self.preview_label = QLabel("暂无预览")
+        self.preview_label = QLabel("生成后会在此显示预览")
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumHeight(280)
         self.preview_label.setStyleSheet("border:1px solid #d9d9d9; background:#fafafa;")
@@ -180,16 +174,6 @@ class CharfileGenWindow(QMainWindow):
         if path:
             self.out_dir_edit.setText(path)
 
-    def _pick_font(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择字体文件",
-            self.font_edit.text().strip() or r"C:\Windows\Fonts",
-            "Font Files (*.ttf *.ttc *.otf);;All Files (*.*)",
-        )
-        if path:
-            self.font_edit.setText(path)
-
     def _open_out_dir(self) -> None:
         out_dir = self.out_dir_edit.text().strip()
         if not out_dir:
@@ -201,9 +185,9 @@ class CharfileGenWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "打开目录失败", str(e))
 
-    def _show_preview(self, path: Path) -> None:
-        pix = QPixmap(str(path))
+    def _apply_preview_pixmap(self, pix: QPixmap) -> None:
         if pix.isNull():
+            self.preview_label.setPixmap(QPixmap())
             self.preview_label.setText("预览读取失败")
             return
         max_w = 2400
@@ -211,6 +195,34 @@ class CharfileGenWindow(QMainWindow):
             pix = pix.scaledToWidth(max_w, mode=Qt.FastTransformation)
         self.preview_label.setPixmap(pix)
         self.preview_label.adjustSize()
+
+    def _show_preview(self, path: Path) -> None:
+        self._apply_preview_pixmap(QPixmap(str(path)))
+
+    def _show_preview_from_charfile(self, path: Path) -> None:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            cols = [ln.strip() for ln in lines[2:] if ln.strip()]
+            if not cols:
+                raise RuntimeError("empty columns")
+
+            h = 16
+            w = len(cols)
+            img = QImage(w, h, QImage.Format_Grayscale8)
+            img.fill(255)
+            for x, col in enumerate(cols):
+                if len(col) != h:
+                    continue
+                for y, bit in enumerate(col):
+                    if bit == "1":
+                        img.setPixel(x, y, 0)
+
+            scale = 16
+            img = img.scaled(w * scale, h * scale, Qt.IgnoreAspectRatio, Qt.FastTransformation)
+            self._apply_preview_pixmap(QPixmap.fromImage(img))
+        except Exception:
+            self.preview_label.setPixmap(QPixmap())
+            self.preview_label.setText("预览读取失败")
 
     def _on_generate(self) -> None:
         try:
@@ -220,28 +232,33 @@ class CharfileGenWindow(QMainWindow):
                 return
 
             out_dir = self.out_dir_edit.text().strip() or "chars/generated"
-            preview_path = str(Path(out_dir) / f"{code}.png")
+            want_preview_file = bool(self.preview_checkbox.isChecked())
 
             result = generate_charfile(
                 cn=self.cn_edit.text().strip(),
                 code=code,
                 out_dir=out_dir,
                 output=None,
-                font=self.font_edit.text().strip() or None,
-                font_size=int(self.font_size_spin.value()),
-                threshold=int(self.threshold_spin.value()),
+                bold=bool(self.bold_checkbox.isChecked()),
+                center_punctuation=bool(self.center_punctuation_checkbox.isChecked()),
                 line1=self.line1_edit.text().strip() or DEFAULT_LINE1,
                 line2=self.line2_edit.text().strip() or DEFAULT_LINE2,
                 gap_cn_code=int(self.gap_cn_code_spin.value()),
                 gap_code=int(self.gap_code_spin.value()),
                 gap_dot=int(self.gap_dot_spin.value()),
                 gap_cn_inner=int(self.gap_cn_inner_spin.value()),
-                preview=preview_path,
+                save_preview=want_preview_file,
+                preview=None,
             )
 
-            self.status_label.setText(f"状态: 生成成功，列数={result.columns}")
+            self.status_label.setText(f"状态: 生成成功，列数 {result.columns}")
             self.out_label.setText(f"输出文件: {result.out_path}")
-            self._show_preview(result.preview_path)
+
+            # Always show preview in UI, even when preview file is not requested.
+            if result.preview_path is not None:
+                self._show_preview(result.preview_path)
+            else:
+                self._show_preview_from_charfile(result.out_path)
         except Exception as e:
             self.status_label.setText(f"状态: 生成失败 - {e}")
             QMessageBox.critical(self, "生成失败", str(e))
@@ -256,4 +273,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
