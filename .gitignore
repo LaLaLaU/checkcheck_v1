@@ -13,6 +13,7 @@ env/
 # Local data
 data/history.db
 data/config.json
+captures/
 
 # OCR model assets (do not version)
 ch_PP-OCRv4_det_infer/
