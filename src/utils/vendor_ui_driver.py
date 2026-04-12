@@ -240,6 +240,11 @@ class VendorUIDriver:
                 continue
         return False
 
+    def _click_button_wrapper_twice(self, btn, *, gap_s: float = 0.05) -> None:
+        btn.click_input()
+        self._sleep(gap_s)
+        btn.click_input()
+
     def _textbox_by_index(self, parent, idx: int):
         return parent.child_window(class_name='ThunderRT6TextBox', found_index=idx).wait('exists', timeout=5)
 
@@ -801,8 +806,16 @@ class VendorUIDriver:
             ins_frm = self._frame('insert')
             insert_titles = ['插入文字', '插入文本', '鎻掑叆鏂囧瓧']
             try:
-                if self._click_button_by_titles(ins_frm, insert_titles, timeout=0.9):
-                    print(f"[drv][{self._ts()}] insert: clicked insert-text button")
+                btn = None
+                for cap in insert_titles:
+                    try:
+                        btn = ins_frm.child_window(title=cap, class_name='ThunderRT6CommandButton').wait('enabled', timeout=0.9)
+                        break
+                    except Exception:
+                        continue
+                if btn is not None:
+                    self._click_button_wrapper_twice(btn)
+                    print(f"[drv][{self._ts()}] insert: double-clicked insert-text button")
                     inserted = True
                 else:
                     raise RuntimeError("insert-text button not found")
@@ -821,8 +834,8 @@ class VendorUIDriver:
                         except Exception:
                             pass
                         if self._norm_ui_text(str(txt)) in insert_norms:
-                            b.click_input()
-                            print(f"[drv] insert: clicked inferred '{txt}'")
+                            self._click_button_wrapper_twice(b)
+                            print(f"[drv] insert: double-clicked inferred '{txt}'")
                             inserted = True
                             break
                     except Exception:
